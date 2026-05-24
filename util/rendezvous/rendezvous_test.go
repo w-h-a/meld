@@ -1,11 +1,11 @@
-package hash_test
+package rendezvous_test
 
 import (
 	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/w-h-a/meld/util/hash"
+	"github.com/w-h-a/meld/util/rendezvous"
 )
 
 func TestAssign_Determinism(t *testing.T) {
@@ -14,9 +14,9 @@ func TestAssign_Determinism(t *testing.T) {
 	key := "workload-1"
 
 	// act
-	first := hash.Assign(nodes, key)
-	second := hash.Assign(nodes, key)
-	third := hash.Assign(nodes, key)
+	first := rendezvous.Assign(nodes, key)
+	second := rendezvous.Assign(nodes, key)
+	third := rendezvous.Assign(nodes, key)
 
 	// assert
 	require.Equal(t, first, second)
@@ -30,8 +30,8 @@ func TestAssign_DeterminismAcrossKeys(t *testing.T) {
 
 	// act + assert
 	for _, key := range keys {
-		first := hash.Assign(nodes, key)
-		second := hash.Assign(nodes, key)
+		first := rendezvous.Assign(nodes, key)
+		second := rendezvous.Assign(nodes, key)
 		require.Equal(t, first, second)
 	}
 }
@@ -46,8 +46,8 @@ func TestAssign_StabilityOnAdd(t *testing.T) {
 	before := make(map[string]string, len(keys))
 	after := make(map[string]string, len(keys))
 	for _, key := range keys {
-		before[key] = hash.Assign(original, key)
-		after[key] = hash.Assign(expanded, key)
+		before[key] = rendezvous.Assign(original, key)
+		after[key] = rendezvous.Assign(expanded, key)
 	}
 
 	moved := movedKeys(before, after)
@@ -70,8 +70,8 @@ func TestAssign_StabilityOnRemove(t *testing.T) {
 	before := make(map[string]string, len(keys))
 	after := make(map[string]string, len(keys))
 	for _, key := range keys {
-		before[key] = hash.Assign(original, key)
-		after[key] = hash.Assign(reduced, key)
+		before[key] = rendezvous.Assign(original, key)
+		after[key] = rendezvous.Assign(reduced, key)
 	}
 
 	moved := movedKeys(before, after)
@@ -89,7 +89,7 @@ func TestAssign_EmptyNodes(t *testing.T) {
 	var nodes []string
 
 	// act
-	result := hash.Assign(nodes, "any-key")
+	result := rendezvous.Assign(nodes, "any-key")
 
 	// assert
 	require.Empty(t, result)

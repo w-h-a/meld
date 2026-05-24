@@ -8,7 +8,7 @@
 // References:
 //   - Thaler & Ravishankar, "Using Name-Based Mappings to Increase
 //     Hit Rates" (1998)
-package hash
+package rendezvous
 
 import "hash/fnv"
 
