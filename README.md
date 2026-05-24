@@ -1,22 +1,16 @@
 # meld
 
-Gossip, CRDT, and convergence primitives for distributed systems.
+Gossip, Membership, and convergence primitives for distributed systems.
 
-Go library providing SWIM membership, conflict-free replicated data types, gossip transport, and rendezvous hashing.
+Go library providing gossip transport, membership, and conflict-free replicated data types.
 
-## Architecture
+## Packages
 
-```mermaid
-graph TD
-    M[membership/] --> SWIM[membership/swim/]
-    G[gossip/] --> UDP[gossip/udp/]
-    C[crdt/]
-
-    C --> ORS[crdt/orset/]
-    C --> LWW[crdt/lww/]
-    C --> GC[crdt/gcounter/]
-    C --> VC[crdt/vclock/]
-```
+| Package       | Implementations                      | Use case                                 |
+| ------------- | ------------------------------------ | ---------------------------------------- |
+| `gossip/`     | `udp`                                | Peer-to-peer gossip transport            |
+| `membership/` | `swim`                               | Cluster membership and failure detection |
+| `crdt/`       | `orset`, `lww`, `gcounter`, `vclock` | Conflict-free replicated data types      |
 
 ## Gossip + SWIM Data Flow
 
