@@ -1,4 +1,4 @@
-// Package hash implements rendezvous hashing (highest random weight)
+// Package rendezvous implements rendezvous hashing (highest random weight)
 // for deterministic placement without coordination.
 //
 // Given the same set of nodes and a key, every caller computes the
