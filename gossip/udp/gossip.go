@@ -31,31 +31,33 @@ type udpGossip struct {
 func New(opts ...gossip.Option) (gossip.Gossip, error) {
 	options := gossip.NewOptions(opts...)
 
-	g := &udpGossip{
-		options: options,
-		mtu:     mtuFrom(options.Context),
-		done:    make(chan struct{}),
-		tracer:  otel.Tracer("meld/gossip/udp"),
-	}
-
 	udpAddr, err := net.ResolveUDPAddr("udp", options.BindAddress)
 	if err != nil {
 		return nil, err
 	}
 
-	g.udpConn, err = net.ListenUDP("udp", udpAddr)
+	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	g.peers = make([]*net.UDPAddr, 0, len(options.Peers))
+	peers := make([]*net.UDPAddr, 0, len(options.Peers))
 	for _, p := range options.Peers {
 		addr, err := net.ResolveUDPAddr("udp", p)
 		if err != nil {
-			g.udpConn.Close()
+			conn.Close()
 			return nil, err
 		}
-		g.peers = append(g.peers, addr)
+		peers = append(peers, addr)
+	}
+
+	g := &udpGossip{
+		options: options,
+		mtu:     mtuFrom(options.Context),
+		udpConn: conn,
+		peers:   peers,
+		done:    make(chan struct{}),
+		tracer:  otel.Tracer("meld/gossip/udp"),
 	}
 
 	return g, nil
