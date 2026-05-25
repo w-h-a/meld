@@ -8,8 +8,8 @@ Go library providing gossip transport, membership, and conflict-free replicated 
 
 | Package       | Implementations                      | Use case                                 |
 | ------------- | ------------------------------------ | ---------------------------------------- |
-| `gossip/`     | `udp`                                | Peer-to-peer gossip transport            |
-| `membership/` | `swim`                               | Cluster membership and failure detection |
+| `gossip/`     | `udp`, `tcp`                         | Peer-to-peer gossip transport            |
+| `membership/` | `swim`, `rapid`                      | Cluster membership and failure detection |
 | `crdt/`       | `orset`, `lww`, `gcounter`, `vclock` | Conflict-free replicated data types      |
 
 ## Gossip + SWIM Data Flow
