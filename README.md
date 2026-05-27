@@ -12,9 +12,6 @@ Go library providing gossip transport, membership, and conflict-free replicated 
 | `membership/` | `swim`, `phi`                                     | Cluster membership and failure detection     |
 | `crdt/`       | `orset`, `lww`, `gcounter`, `pncounter`, `vclock` | Conflict-free replicated data types          |
 
-Three independent primitives. Consumers compose them in their own
-binaries — no meld package imports another.
-
 ## SWIM Failure Detection
 
 SWIM (Das et al., 2002) detects failures via probe-based protocol.
