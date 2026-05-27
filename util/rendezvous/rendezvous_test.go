@@ -84,6 +84,25 @@ func TestAssign_StabilityOnRemove(t *testing.T) {
 	}
 }
 
+func TestAssign_Uniformity(t *testing.T) {
+	// arrange
+	nodes := []string{"node-a", "node-b", "node-c"}
+	keys := generateKeys(1000)
+
+	// act
+	counts := make(map[string]int)
+	for _, key := range keys {
+		counts[rendezvous.Assign(nodes, key)] += 1
+	}
+
+	// assert
+	fair := len(keys) / len(nodes)
+	tolerance := fair / 3
+	for _, node := range nodes {
+		require.InDelta(t, fair, counts[node], float64(tolerance), "node %s", node)
+	}
+}
+
 func TestAssign_EmptyNodes(t *testing.T) {
 	// arrange
 	var nodes []string
