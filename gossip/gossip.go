@@ -19,5 +19,6 @@ type Gossip interface {
 	Addr(ctx context.Context) net.Addr
 	Listen(ctx context.Context) (<-chan *Packet, error)
 	Broadcast(ctx context.Context, msg []byte) error
+	SetPeers(ctx context.Context, peers ...string) error
 	Stop(ctx context.Context) error
 }
