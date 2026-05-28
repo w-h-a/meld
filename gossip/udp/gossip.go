@@ -20,7 +20,7 @@ type udpGossip struct {
 	mtu       int
 	udpConn   *net.UDPConn
 	peers     []*net.UDPAddr
-	msgCh     chan []byte
+	msgCh     chan *gossip.Packet
 	done      chan struct{}
 	wg        sync.WaitGroup
 	listening atomic.Bool
@@ -71,12 +71,12 @@ func (g *udpGossip) Addr(ctx context.Context) net.Addr {
 // Listen starts a routine reading UDP datagrams and returns
 // a channel of incoming messages. Must be called at most once.
 // The channel is closed when Stop is called.
-func (g *udpGossip) Listen(_ context.Context) (<-chan []byte, error) {
+func (g *udpGossip) Listen(_ context.Context) (<-chan *gossip.Packet, error) {
 	if !g.listening.CompareAndSwap(false, true) {
 		return nil, errors.New("already listening")
 	}
 
-	g.msgCh = make(chan []byte, 64)
+	g.msgCh = make(chan *gossip.Packet, 64)
 
 	g.wg.Add(1)
 	go g.readUDP()
@@ -147,7 +147,7 @@ func (g *udpGossip) Stop(_ context.Context) error {
 func (g *udpGossip) readUDP() {
 	defer g.wg.Done()
 
-	_, span := g.tracer.Start(g.options.Context, "Gossip.Listen",
+	ctx, span := g.tracer.Start(g.options.Context, "Gossip.Listen",
 		trace.WithAttributes(
 			attribute.String("gossip.direction", "recv"),
 			attribute.String("gossip.transport", "udp"),
@@ -159,7 +159,7 @@ func (g *udpGossip) readUDP() {
 	buf := make([]byte, 65535)
 
 	for {
-		n, _, err := g.udpConn.ReadFromUDP(buf)
+		n, addr, err := g.udpConn.ReadFromUDP(buf)
 		if err != nil {
 			select {
 			case <-g.done:
@@ -170,13 +170,28 @@ func (g *udpGossip) readUDP() {
 			}
 		}
 
-		msg := make([]byte, n)
-		copy(msg, buf[:n])
-
-		select {
-		case g.msgCh <- msg:
-		case <-g.done:
+		if !g.handleDatagram(ctx, addr, buf[:n]) {
 			return
 		}
+	}
+}
+
+// handleDatagram processes a single received datagram.
+func (g *udpGossip) handleDatagram(ctx context.Context, addr *net.UDPAddr, data []byte) bool {
+	_, span := g.tracer.Start(ctx, "Gossip.Receive", trace.WithAttributes(
+		attribute.String("gossip.sender_address", addr.String()),
+		attribute.String("gossip.transport", "udp"),
+		attribute.Int("gossip.message_bytes", len(data)),
+	))
+	defer span.End()
+
+	msg := make([]byte, len(data))
+	copy(msg, data)
+
+	select {
+	case <-g.done:
+		return false
+	case g.msgCh <- &gossip.Packet{From: addr, Data: msg}:
+		return true
 	}
 }

@@ -8,10 +8,16 @@ import (
 	"net"
 )
 
+// Packet is a received message with its sender's network address.
+type Packet struct {
+	From net.Addr
+	Data []byte
+}
+
 // Gossip is the port interface for state propagation.
 type Gossip interface {
 	Addr(ctx context.Context) net.Addr
-	Listen(ctx context.Context) (<-chan []byte, error)
+	Listen(ctx context.Context) (<-chan *Packet, error)
 	Broadcast(ctx context.Context, msg []byte) error
 	Stop(ctx context.Context) error
 }

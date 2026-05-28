@@ -21,6 +21,7 @@ import (
 
 const (
 	maxMessageSize  = 16 * 1024 * 1024 // 16 MB
+	maxAddrSize     = 256
 	connReadTimeout = 30 * time.Second
 )
 
@@ -28,7 +29,7 @@ type tcpGossip struct {
 	options   gossip.Options
 	listener  *net.TCPListener
 	peers     []string
-	msgCh     chan []byte
+	msgCh     chan *gossip.Packet
 	done      chan struct{}
 	wg        sync.WaitGroup
 	listening atomic.Bool
@@ -71,12 +72,12 @@ func (g *tcpGossip) Addr(_ context.Context) net.Addr {
 // Listen starts a routine accepting TCP connections and returns
 // a channel of incoming messages. Must be called at most once.
 // The channel is closed when Stop is called.
-func (g *tcpGossip) Listen(_ context.Context) (<-chan []byte, error) {
+func (g *tcpGossip) Listen(_ context.Context) (<-chan *gossip.Packet, error) {
 	if !g.listening.CompareAndSwap(false, true) {
 		return nil, errors.New("already listening")
 	}
 
-	g.msgCh = make(chan []byte, 64)
+	g.msgCh = make(chan *gossip.Packet, 64)
 
 	g.wg.Add(1)
 	go g.acceptLoop()
@@ -84,9 +85,7 @@ func (g *tcpGossip) Listen(_ context.Context) (<-chan []byte, error) {
 	return g.msgCh, nil
 }
 
-// Broadcast sends msg to all known peers via TCP. Each peer
-// receives a 4-byte big-endian length header followed by the
-// payload.
+// Broadcast sends msg to all known peers via TCP.
 func (g *tcpGossip) Broadcast(ctx context.Context, msg []byte) error {
 	ctx, span := g.tracer.Start(ctx, "Gossip.Broadcast",
 		trace.WithAttributes(
@@ -97,11 +96,6 @@ func (g *tcpGossip) Broadcast(ctx context.Context, msg []byte) error {
 	)
 	defer span.End()
 
-	// prepend a fixed 4-byte header containing the payload
-	// length in big-endian byte order.
-	header := make([]byte, 4)
-	binary.BigEndian.PutUint32(header, uint32(len(msg)))
-
 	var lastErr error
 	sent := 0
 
@@ -110,7 +104,7 @@ func (g *tcpGossip) Broadcast(ctx context.Context, msg []byte) error {
 			return err
 		}
 
-		if err := g.sendTo(ctx, addr, header, msg); err != nil {
+		if err := g.sendTo(ctx, addr, msg); err != nil {
 			lastErr = err
 			span.RecordError(err, trace.WithAttributes(attribute.String("gossip.peer_address", addr)))
 			continue
@@ -149,7 +143,7 @@ func (g *tcpGossip) Stop(_ context.Context) error {
 	return nil
 }
 
-func (g *tcpGossip) sendTo(ctx context.Context, addr string, header, msg []byte) error {
+func (g *tcpGossip) sendTo(ctx context.Context, addr string, msg []byte) error {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -161,10 +155,22 @@ func (g *tcpGossip) sendTo(ctx context.Context, addr string, header, msg []byte)
 		conn.SetWriteDeadline(deadline)
 	}
 
-	if _, err := conn.Write(header); err != nil {
+	advAddr := []byte(g.listener.Addr().String())
+
+	addrHeader := make([]byte, 4)
+	binary.BigEndian.PutUint32(addrHeader, uint32(len(advAddr)))
+	if _, err := conn.Write(addrHeader); err != nil {
+		return err
+	}
+	if _, err := conn.Write(advAddr); err != nil {
 		return err
 	}
 
+	payloadHeader := make([]byte, 4)
+	binary.BigEndian.PutUint32(payloadHeader, uint32(len(msg)))
+	if _, err := conn.Write(payloadHeader); err != nil {
+		return err
+	}
 	if _, err := conn.Write(msg); err != nil {
 		return err
 	}
@@ -207,8 +213,8 @@ func (g *tcpGossip) acceptLoop() {
 	}
 }
 
-// handleConn reads a single length-prefixed message from conn
-// and forwards it to the message channel.
+// handleConn reads a single message from conn and
+// forwards it to the message channel.
 func (g *tcpGossip) handleConn(ctx context.Context, conn net.Conn) {
 	defer g.wg.Done()
 	defer func() {
@@ -218,45 +224,84 @@ func (g *tcpGossip) handleConn(ctx context.Context, conn net.Conn) {
 		g.mtx.Unlock()
 	}()
 
-	span := trace.SpanFromContext(ctx)
-	peerAddr := conn.RemoteAddr().String()
+	parent := trace.SpanFromContext(ctx)
+	ephemeralAddr := conn.RemoteAddr().String()
 
 	conn.SetReadDeadline(time.Now().Add(connReadTimeout))
 
-	// read the 4-byte length header.
+	// read the sender's advertised listener address.
+	addrHeader := make([]byte, 4)
+	if _, err := io.ReadFull(conn, addrHeader); err != nil {
+		parent.AddEvent("tcp.read_error", trace.WithAttributes(
+			attribute.String("error.message", err.Error()),
+			attribute.String("gossip.peer_address", ephemeralAddr),
+		))
+		return
+	}
+
+	addrLength := binary.BigEndian.Uint32(addrHeader)
+	if addrLength == 0 || addrLength > maxAddrSize {
+		parent.AddEvent("tcp.read_error", trace.WithAttributes(
+			attribute.String("error.message", "sender address length out of range"),
+			attribute.String("gossip.peer_address", ephemeralAddr),
+		))
+		return
+	}
+
+	addrBuf := make([]byte, addrLength)
+	if _, err := io.ReadFull(conn, addrBuf); err != nil {
+		parent.AddEvent("tcp.read_error", trace.WithAttributes(
+			attribute.String("error.message", err.Error()),
+			attribute.String("gossip.peer_address", ephemeralAddr),
+		))
+		return
+	}
+
+	senderAddr := string(addrBuf)
+
+	from, err := net.ResolveTCPAddr("tcp", senderAddr)
+	if err != nil {
+		parent.AddEvent("tcp.read_error", trace.WithAttributes(
+			attribute.String("error.message", err.Error()),
+			attribute.String("gossip.peer_address", ephemeralAddr),
+		))
+		return
+	}
+
+	_, child := g.tracer.Start(ctx, "Gossip.Receive", trace.WithAttributes(
+		attribute.String("gossip.sender_address", senderAddr),
+		attribute.String("gossip.transport", "tcp"),
+	))
+	defer child.End()
+
+	// read the sender's message
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(conn, header); err != nil {
-		span.AddEvent("tcp.read_error", trace.WithAttributes(
-			attribute.String("error.message", err.Error()),
-			attribute.String("gossip.peer_address", peerAddr),
-		))
+		child.RecordError(err)
+		child.SetStatus(codes.Error, err.Error())
 		return
 	}
 
-	// decode the payload length from the header.
 	length := binary.BigEndian.Uint32(header)
-
 	if length > maxMessageSize {
-		span.AddEvent("tcp.read_error", trace.WithAttributes(
+		child.AddEvent("tcp.read_error", trace.WithAttributes(
 			attribute.String("error.message", "message size exceeds limit"),
 			attribute.Int64("gossip.message_bytes", int64(length)),
-			attribute.String("gossip.peer_address", peerAddr),
 		))
 		return
 	}
 
-	// read exactly that many bytes.
 	msg := make([]byte, length)
 	if _, err := io.ReadFull(conn, msg); err != nil {
-		span.AddEvent("tcp.read_error", trace.WithAttributes(
-			attribute.String("error.message", err.Error()),
-			attribute.String("gossip.peer_address", peerAddr),
-		))
+		child.RecordError(err)
+		child.SetStatus(codes.Error, err.Error())
 		return
 	}
 
+	child.SetAttributes(attribute.Int("gossip.message_bytes", int(length)))
+
 	select {
-	case g.msgCh <- msg:
 	case <-g.done:
+	case g.msgCh <- &gossip.Packet{From: from, Data: msg}:
 	}
 }
