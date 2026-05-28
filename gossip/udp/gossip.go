@@ -4,6 +4,7 @@ package udp
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ type udpGossip struct {
 	options   gossip.Options
 	mtu       int
 	udpConn   *net.UDPConn
+	peerMtx   sync.RWMutex
 	peers     []*net.UDPAddr
 	msgCh     chan *gossip.Packet
 	done      chan struct{}
@@ -84,14 +86,14 @@ func (g *udpGossip) Listen(_ context.Context) (<-chan *gossip.Packet, error) {
 	return g.msgCh, nil
 }
 
-// Broadcast sends msg to all known peers via UDP. Returns an
-// error if the message exceeds the MTU, or if every peer fails.
+// Broadcast sends msg to all known peers via UDP.
 func (g *udpGossip) Broadcast(ctx context.Context, msg []byte) error {
 	ctx, span := g.tracer.Start(ctx, "Gossip.Broadcast",
 		trace.WithAttributes(
 			attribute.String("gossip.direction", "send"),
 			attribute.String("gossip.transport", "udp"),
 			attribute.Int("gossip.message_bytes", len(msg)),
+			attribute.Int("gossip.fanout", g.options.Fanout),
 		),
 	)
 	defer span.End()
@@ -100,10 +102,27 @@ func (g *udpGossip) Broadcast(ctx context.Context, msg []byte) error {
 		return errors.New("message exceeds MTU")
 	}
 
+	g.peerMtx.RLock()
+	snapshot := make([]*net.UDPAddr, len(g.peers))
+	copy(snapshot, g.peers)
+	g.peerMtx.RUnlock()
+
+	span.SetAttributes(attribute.Int("gossip.peers_available", len(snapshot)))
+
+	n := min(g.options.Fanout, len(snapshot))
+
+	for i := range n {
+		j := i + rand.IntN(len(snapshot)-i)
+		snapshot[i], snapshot[j] = snapshot[j], snapshot[i]
+	}
+	targets := snapshot[:n]
+
+	span.SetAttributes(attribute.Int("gossip.peers_selected", n))
+
 	var lastErr error
 	sent := 0
 
-	for _, addr := range g.peers {
+	for _, addr := range targets {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -123,6 +142,34 @@ func (g *udpGossip) Broadcast(ctx context.Context, msg []byte) error {
 		span.SetStatus(codes.Error, lastErr.Error())
 		return lastErr
 	}
+
+	return nil
+}
+
+// SetPeers replaces the peer list.
+func (g *udpGossip) SetPeers(ctx context.Context, peers ...string) error {
+	_, span := g.tracer.Start(ctx, "Gossip.SetPeers",
+		trace.WithAttributes(
+			attribute.String("gossip.transport", "udp"),
+			attribute.Int("gossip.peers_count", len(peers)),
+		),
+	)
+	defer span.End()
+
+	resolved := make([]*net.UDPAddr, 0, len(peers))
+	for _, p := range peers {
+		addr, err := net.ResolveUDPAddr("udp", p)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return err
+		}
+		resolved = append(resolved, addr)
+	}
+
+	g.peerMtx.Lock()
+	g.peers = resolved
+	g.peerMtx.Unlock()
 
 	return nil
 }

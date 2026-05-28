@@ -9,6 +9,7 @@ type Option func(*Options)
 type Options struct {
 	BindAddress string
 	Peers       []string
+	Fanout      int
 	Context     context.Context
 }
 
@@ -16,6 +17,7 @@ func NewOptions(opts ...Option) Options {
 	options := Options{
 		BindAddress: ":0",
 		Peers:       []string{},
+		Fanout:      3,
 		Context:     context.Background(),
 	}
 
@@ -38,5 +40,16 @@ func WithBindAddress(addr string) Option {
 func WithPeers(peers ...string) Option {
 	return func(o *Options) {
 		o.Peers = append(o.Peers, peers...)
+	}
+}
+
+// WithFanout sets the number of randomly selected peers per
+// Broadcast call.
+func WithFanout(n int) Option {
+	return func(o *Options) {
+		if n < 1 {
+			n = 1
+		}
+		o.Fanout = n
 	}
 }

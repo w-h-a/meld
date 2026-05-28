@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -28,13 +29,14 @@ const (
 type tcpGossip struct {
 	options   gossip.Options
 	listener  *net.TCPListener
+	peerMtx   sync.RWMutex
 	peers     []string
 	msgCh     chan *gossip.Packet
 	done      chan struct{}
 	wg        sync.WaitGroup
 	listening atomic.Bool
 	once      sync.Once
-	mtx       sync.RWMutex
+	connMtx   sync.RWMutex
 	conns     map[net.Conn]struct{}
 	tracer    trace.Tracer
 }
@@ -92,14 +94,32 @@ func (g *tcpGossip) Broadcast(ctx context.Context, msg []byte) error {
 			attribute.String("gossip.direction", "send"),
 			attribute.String("gossip.transport", "tcp"),
 			attribute.Int("gossip.message_bytes", len(msg)),
+			attribute.Int("gossip.fanout", g.options.Fanout),
 		),
 	)
 	defer span.End()
 
+	g.peerMtx.RLock()
+	snapshot := make([]string, len(g.peers))
+	copy(snapshot, g.peers)
+	g.peerMtx.RUnlock()
+
+	span.SetAttributes(attribute.Int("gossip.peers_available", len(snapshot)))
+
+	n := min(g.options.Fanout, len(snapshot))
+
+	for i := range n {
+		j := i + rand.IntN(len(snapshot)-i)
+		snapshot[i], snapshot[j] = snapshot[j], snapshot[i]
+	}
+	targets := snapshot[:n]
+
+	span.SetAttributes(attribute.Int("gossip.peers_selected", n))
+
 	var lastErr error
 	sent := 0
 
-	for _, addr := range g.peers {
+	for _, addr := range targets {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -123,6 +143,26 @@ func (g *tcpGossip) Broadcast(ctx context.Context, msg []byte) error {
 	return nil
 }
 
+// SetPeers replaces the peer list.
+func (g *tcpGossip) SetPeers(ctx context.Context, peers ...string) error {
+	_, span := g.tracer.Start(ctx, "Gossip.SetPeers",
+		trace.WithAttributes(
+			attribute.String("gossip.transport", "tcp"),
+			attribute.Int("gossip.peers_count", len(peers)),
+		),
+	)
+	defer span.End()
+
+	next := make([]string, len(peers))
+	copy(next, peers)
+
+	g.peerMtx.Lock()
+	g.peers = next
+	g.peerMtx.Unlock()
+
+	return nil
+}
+
 // Stop closes the TCP listener, waits for all connection
 // handlers to exit, and closes the message channel. Safe to
 // call multiple times.
@@ -130,11 +170,11 @@ func (g *tcpGossip) Stop(_ context.Context) error {
 	g.once.Do(func() {
 		close(g.done)
 		g.listener.Close()
-		g.mtx.RLock()
+		g.connMtx.RLock()
 		for conn := range g.conns {
 			conn.Close()
 		}
-		g.mtx.RUnlock()
+		g.connMtx.RUnlock()
 		g.wg.Wait()
 		if g.msgCh != nil {
 			close(g.msgCh)
@@ -204,9 +244,9 @@ func (g *tcpGossip) acceptLoop() {
 			}
 		}
 
-		g.mtx.Lock()
+		g.connMtx.Lock()
 		g.conns[conn] = struct{}{}
-		g.mtx.Unlock()
+		g.connMtx.Unlock()
 
 		g.wg.Add(1)
 		go g.handleConn(ctx, conn)
@@ -219,9 +259,9 @@ func (g *tcpGossip) handleConn(ctx context.Context, conn net.Conn) {
 	defer g.wg.Done()
 	defer func() {
 		conn.Close()
-		g.mtx.Lock()
+		g.connMtx.Lock()
 		delete(g.conns, conn)
-		g.mtx.Unlock()
+		g.connMtx.Unlock()
 	}()
 
 	parent := trace.SpanFromContext(ctx)
