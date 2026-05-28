@@ -27,7 +27,10 @@ func TestBroadcast_SmallMessage(t *testing.T) {
 	require.NoError(t, err)
 	defer receiver.Stop(ctx)
 
-	sender, err := tcp.New(gossip.WithPeers(receiver.Addr(ctx).String()))
+	sender, err := tcp.New(
+		gossip.WithBindAddress("127.0.0.1:0"),
+		gossip.WithPeers(receiver.Addr(ctx).String()),
+	)
 	require.NoError(t, err)
 	defer sender.Stop(ctx)
 
@@ -42,8 +45,9 @@ func TestBroadcast_SmallMessage(t *testing.T) {
 
 	// assert
 	select {
-	case got := <-ch:
-		require.Equal(t, want, got)
+	case pkt := <-ch:
+		require.Equal(t, want, pkt.Data)
+		require.Equal(t, sender.Addr(ctx).String(), pkt.From.String())
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for message")
 	}
@@ -58,7 +62,10 @@ func TestBroadcast_LargeMessage(t *testing.T) {
 	require.NoError(t, err)
 	defer receiver.Stop(ctx)
 
-	sender, err := tcp.New(gossip.WithPeers(receiver.Addr(ctx).String()))
+	sender, err := tcp.New(
+		gossip.WithBindAddress("127.0.0.1:0"),
+		gossip.WithPeers(receiver.Addr(ctx).String()),
+	)
 	require.NoError(t, err)
 	defer sender.Stop(ctx)
 
@@ -76,8 +83,9 @@ func TestBroadcast_LargeMessage(t *testing.T) {
 
 	// assert
 	select {
-	case got := <-ch:
-		require.Equal(t, want, got)
+	case pkt := <-ch:
+		require.Equal(t, want, pkt.Data)
+		require.Equal(t, sender.Addr(ctx).String(), pkt.From.String())
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for message")
 	}
