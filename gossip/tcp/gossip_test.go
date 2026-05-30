@@ -2,6 +2,7 @@ package tcp_test
 
 import (
 	"context"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -16,99 +17,6 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
-}
-
-func TestBroadcast_SmallMessage(t *testing.T) {
-	// arrange
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	receiver, err := tcp.New(gossip.WithBindAddress("127.0.0.1:0"))
-	require.NoError(t, err)
-	defer receiver.Stop(ctx)
-
-	sender, err := tcp.New(
-		gossip.WithBindAddress("127.0.0.1:0"),
-		gossip.WithPeers(receiver.Addr(ctx).String()),
-	)
-	require.NoError(t, err)
-	defer sender.Stop(ctx)
-
-	ch, err := receiver.Listen(ctx)
-	require.NoError(t, err)
-
-	want := []byte("hello gossip")
-
-	// act
-	err = sender.Broadcast(ctx, want)
-	require.NoError(t, err)
-
-	// assert
-	select {
-	case pkt := <-ch:
-		require.Equal(t, want, pkt.Data)
-		require.Equal(t, sender.Addr(ctx).String(), pkt.From.String())
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for message")
-	}
-}
-
-func TestBroadcast_LargeMessage(t *testing.T) {
-	// arrange
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	receiver, err := tcp.New(gossip.WithBindAddress("127.0.0.1:0"))
-	require.NoError(t, err)
-	defer receiver.Stop(ctx)
-
-	sender, err := tcp.New(
-		gossip.WithBindAddress("127.0.0.1:0"),
-		gossip.WithPeers(receiver.Addr(ctx).String()),
-	)
-	require.NoError(t, err)
-	defer sender.Stop(ctx)
-
-	ch, err := receiver.Listen(ctx)
-	require.NoError(t, err)
-
-	want := make([]byte, 4096)
-	for i := range want {
-		want[i] = byte(i % 256)
-	}
-
-	// act
-	err = sender.Broadcast(ctx, want)
-	require.NoError(t, err)
-
-	// assert
-	select {
-	case pkt := <-ch:
-		require.Equal(t, want, pkt.Data)
-		require.Equal(t, sender.Addr(ctx).String(), pkt.From.String())
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for message")
-	}
-}
-
-func TestStop_ClosesChannel(t *testing.T) {
-	// arrange
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	node, err := tcp.New()
-	require.NoError(t, err)
-
-	ch, err := node.Listen(ctx)
-	require.NoError(t, err)
-
-	// act
-	err = node.Stop(ctx)
-	require.NoError(t, err)
-
-	// assert
-	_, open := <-ch
-	require.False(t, open)
 }
 
 func TestSetPeers_DynamicAdd(t *testing.T) {
@@ -147,9 +55,9 @@ func TestSetPeers_DynamicAdd(t *testing.T) {
 
 	// node 0 initially knows nodes 1-3 only
 	err = nodes[0].SetPeers(ctx,
-		nodes[1].Addr(ctx).String(),
-		nodes[2].Addr(ctx).String(),
-		nodes[3].Addr(ctx).String(),
+		nodes[1].Addr(ctx),
+		nodes[2].Addr(ctx),
+		nodes[3].Addr(ctx),
 	)
 	require.NoError(t, err)
 
@@ -175,10 +83,10 @@ func TestSetPeers_DynamicAdd(t *testing.T) {
 
 	// act: add node 4 to peers and broadcast again
 	err = nodes[0].SetPeers(ctx,
-		nodes[1].Addr(ctx).String(),
-		nodes[2].Addr(ctx).String(),
-		nodes[3].Addr(ctx).String(),
-		nodes[4].Addr(ctx).String(),
+		nodes[1].Addr(ctx),
+		nodes[2].Addr(ctx),
+		nodes[3].Addr(ctx),
+		nodes[4].Addr(ctx),
 	)
 	require.NoError(t, err)
 
@@ -193,6 +101,131 @@ func TestSetPeers_DynamicAdd(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatalf("node %d: timed out waiting for message", i)
 		}
+	}
+}
+
+func TestSendTo_DeliversToTargetPeer(t *testing.T) {
+	// arrange
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	receiver, err := tcp.New(gossip.WithBindAddress("127.0.0.1:0"))
+	require.NoError(t, err)
+	defer receiver.Stop(ctx)
+
+	sender, err := tcp.New(gossip.WithBindAddress("127.0.0.1:0"))
+	require.NoError(t, err)
+	defer sender.Stop(ctx)
+
+	ch, err := receiver.Listen(ctx)
+	require.NoError(t, err)
+
+	want := []byte("point-to-point")
+
+	// act
+	err = sender.SendTo(ctx, receiver.Addr(ctx), want)
+	require.NoError(t, err)
+
+	// assert
+	select {
+	case pkt := <-ch:
+		require.Equal(t, want, pkt.Data)
+		require.Equal(t, sender.Addr(ctx).String(), pkt.From.String())
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for message")
+	}
+}
+
+func TestStop_ClosesChannel(t *testing.T) {
+	// arrange
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	node, err := tcp.New()
+	require.NoError(t, err)
+
+	ch, err := node.Listen(ctx)
+	require.NoError(t, err)
+
+	// act
+	err = node.Stop(ctx)
+	require.NoError(t, err)
+
+	// assert
+	_, open := <-ch
+	require.False(t, open)
+}
+
+func TestBroadcast_SmallMessage(t *testing.T) {
+	// arrange
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	receiver, err := tcp.New(gossip.WithBindAddress("127.0.0.1:0"))
+	require.NoError(t, err)
+	defer receiver.Stop(ctx)
+
+	sender, err := tcp.New(
+		gossip.WithBindAddress("127.0.0.1:0"),
+		gossip.WithPeers(receiver.Addr(ctx)),
+	)
+	require.NoError(t, err)
+	defer sender.Stop(ctx)
+
+	ch, err := receiver.Listen(ctx)
+	require.NoError(t, err)
+
+	want := []byte("hello gossip")
+
+	// act
+	err = sender.Broadcast(ctx, want)
+	require.NoError(t, err)
+
+	// assert
+	select {
+	case pkt := <-ch:
+		require.Equal(t, want, pkt.Data)
+		require.Equal(t, sender.Addr(ctx).String(), pkt.From.String())
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for message")
+	}
+}
+
+func TestBroadcast_LargeMessage(t *testing.T) {
+	// arrange
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	receiver, err := tcp.New(gossip.WithBindAddress("127.0.0.1:0"))
+	require.NoError(t, err)
+	defer receiver.Stop(ctx)
+
+	sender, err := tcp.New(
+		gossip.WithBindAddress("127.0.0.1:0"),
+		gossip.WithPeers(receiver.Addr(ctx)),
+	)
+	require.NoError(t, err)
+	defer sender.Stop(ctx)
+
+	ch, err := receiver.Listen(ctx)
+	require.NoError(t, err)
+
+	want := make([]byte, 4096)
+	for i := range want {
+		want[i] = byte(i % 256)
+	}
+
+	// act
+	err = sender.Broadcast(ctx, want)
+	require.NoError(t, err)
+
+	// assert
+	select {
+	case pkt := <-ch:
+		require.Equal(t, want, pkt.Data)
+		require.Equal(t, sender.Addr(ctx).String(), pkt.From.String())
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for message")
 	}
 }
 
@@ -216,9 +249,9 @@ func TestBroadcast_Fanout(t *testing.T) {
 		channels[i] = ch
 	}
 
-	peerAddrs := make([]string, len(receivers))
+	peerAddrs := make([]net.Addr, len(receivers))
 	for i, r := range receivers {
-		peerAddrs[i] = r.Addr(ctx).String()
+		peerAddrs[i] = r.Addr(ctx)
 	}
 
 	sender, err := tcp.New(
