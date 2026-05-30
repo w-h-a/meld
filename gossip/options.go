@@ -1,6 +1,9 @@
 package gossip
 
-import "context"
+import (
+	"context"
+	"net"
+)
 
 // Option configures a Gossip transport.
 type Option func(*Options)
@@ -8,7 +11,7 @@ type Option func(*Options)
 // Options hold configuration for a Gossip transport.
 type Options struct {
 	BindAddress string
-	Peers       []string
+	Peers       []net.Addr
 	Fanout      int
 	Context     context.Context
 }
@@ -16,7 +19,7 @@ type Options struct {
 func NewOptions(opts ...Option) Options {
 	options := Options{
 		BindAddress: ":0",
-		Peers:       []string{},
+		Peers:       []net.Addr{},
 		Fanout:      3,
 		Context:     context.Background(),
 	}
@@ -37,7 +40,7 @@ func WithBindAddress(addr string) Option {
 }
 
 // WithPeers appends known peer addresses.
-func WithPeers(peers ...string) Option {
+func WithPeers(peers ...net.Addr) Option {
 	return func(o *Options) {
 		o.Peers = append(o.Peers, peers...)
 	}

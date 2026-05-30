@@ -16,12 +16,13 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// udpGossip is a UDP gossip adapter.
 type udpGossip struct {
 	options   gossip.Options
 	mtu       int
 	udpConn   *net.UDPConn
 	peerMtx   sync.RWMutex
-	peers     []*net.UDPAddr
+	peers     []net.Addr
 	msgCh     chan *gossip.Packet
 	done      chan struct{}
 	wg        sync.WaitGroup
@@ -43,15 +44,8 @@ func New(opts ...gossip.Option) (gossip.Gossip, error) {
 		return nil, err
 	}
 
-	peers := make([]*net.UDPAddr, 0, len(options.Peers))
-	for _, p := range options.Peers {
-		addr, err := net.ResolveUDPAddr("udp", p)
-		if err != nil {
-			conn.Close()
-			return nil, err
-		}
-		peers = append(peers, addr)
-	}
+	peers := make([]net.Addr, len(options.Peers))
+	copy(peers, options.Peers)
 
 	g := &udpGossip{
 		options: options,
@@ -86,15 +80,71 @@ func (g *udpGossip) Listen(_ context.Context) (<-chan *gossip.Packet, error) {
 	return g.msgCh, nil
 }
 
+// SetPeers replaces the peer list.
+func (g *udpGossip) SetPeers(ctx context.Context, peers ...net.Addr) error {
+	_, span := g.tracer.Start(ctx, "Gossip.SetPeers", trace.WithAttributes(
+		attribute.String("gossip.transport", "udp"),
+		attribute.Int("gossip.peers_count", len(peers)),
+	),
+	)
+	defer span.End()
+
+	next := make([]net.Addr, len(peers))
+	copy(next, peers)
+
+	g.peerMtx.Lock()
+	g.peers = next
+	g.peerMtx.Unlock()
+
+	return nil
+}
+
+// SendTo delivers msg to a single peer at addr via UDP.
+func (g *udpGossip) SendTo(ctx context.Context, addr net.Addr, msg []byte) error {
+	_, span := g.tracer.Start(ctx, "Gossip.SendTo", trace.WithAttributes(
+		attribute.String("gossip.direction", "send"),
+		attribute.String("gossip.transport", "udp"),
+		attribute.String("gossip.peer_address", addr.String()),
+		attribute.Int("gossip.message_bytes", len(msg)),
+	))
+	defer span.End()
+
+	if len(msg) >= g.mtu {
+		return errors.New("message exceeds MTU")
+	}
+
+	if _, err := g.udpConn.WriteTo(msg, addr); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+
+	return nil
+}
+
+// Stop closes the UDP socket, waits for the read routine to
+// exit, and closes the message channel. Safe to call multiple
+// times.
+func (g *udpGossip) Stop(_ context.Context) error {
+	g.once.Do(func() {
+		close(g.done)
+		g.udpConn.Close()
+		g.wg.Wait()
+		if g.msgCh != nil {
+			close(g.msgCh)
+		}
+	})
+	return nil
+}
+
 // Broadcast sends msg to all known peers via UDP.
 func (g *udpGossip) Broadcast(ctx context.Context, msg []byte) error {
-	ctx, span := g.tracer.Start(ctx, "Gossip.Broadcast",
-		trace.WithAttributes(
-			attribute.String("gossip.direction", "send"),
-			attribute.String("gossip.transport", "udp"),
-			attribute.Int("gossip.message_bytes", len(msg)),
-			attribute.Int("gossip.fanout", g.options.Fanout),
-		),
+	ctx, span := g.tracer.Start(ctx, "Gossip.Broadcast", trace.WithAttributes(
+		attribute.String("gossip.direction", "send"),
+		attribute.String("gossip.transport", "udp"),
+		attribute.Int("gossip.message_bytes", len(msg)),
+		attribute.Int("gossip.fanout", g.options.Fanout),
+	),
 	)
 	defer span.End()
 
@@ -103,7 +153,7 @@ func (g *udpGossip) Broadcast(ctx context.Context, msg []byte) error {
 	}
 
 	g.peerMtx.RLock()
-	snapshot := make([]*net.UDPAddr, len(g.peers))
+	snapshot := make([]net.Addr, len(g.peers))
 	copy(snapshot, g.peers)
 	g.peerMtx.RUnlock()
 
@@ -146,60 +196,16 @@ func (g *udpGossip) Broadcast(ctx context.Context, msg []byte) error {
 	return nil
 }
 
-// SetPeers replaces the peer list.
-func (g *udpGossip) SetPeers(ctx context.Context, peers ...string) error {
-	_, span := g.tracer.Start(ctx, "Gossip.SetPeers",
-		trace.WithAttributes(
-			attribute.String("gossip.transport", "udp"),
-			attribute.Int("gossip.peers_count", len(peers)),
-		),
-	)
-	defer span.End()
-
-	resolved := make([]*net.UDPAddr, 0, len(peers))
-	for _, p := range peers {
-		addr, err := net.ResolveUDPAddr("udp", p)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return err
-		}
-		resolved = append(resolved, addr)
-	}
-
-	g.peerMtx.Lock()
-	g.peers = resolved
-	g.peerMtx.Unlock()
-
-	return nil
-}
-
-// Stop closes the UDP socket, waits for the read routine to
-// exit, and closes the message channel. Safe to call multiple
-// times.
-func (g *udpGossip) Stop(_ context.Context) error {
-	g.once.Do(func() {
-		close(g.done)
-		g.udpConn.Close()
-		g.wg.Wait()
-		if g.msgCh != nil {
-			close(g.msgCh)
-		}
-	})
-	return nil
-}
-
 // readUDP loops reading datagrams from the socket and forwarding
 // them to the message channel.
 func (g *udpGossip) readUDP() {
 	defer g.wg.Done()
 
-	ctx, span := g.tracer.Start(g.options.Context, "Gossip.Listen",
-		trace.WithAttributes(
-			attribute.String("gossip.direction", "recv"),
-			attribute.String("gossip.transport", "udp"),
-			attribute.String("gossip.bind_address", g.udpConn.LocalAddr().String()),
-		),
+	ctx, span := g.tracer.Start(g.options.Context, "Gossip.Listen", trace.WithAttributes(
+		attribute.String("gossip.direction", "recv"),
+		attribute.String("gossip.transport", "udp"),
+		attribute.String("gossip.bind_address", g.udpConn.LocalAddr().String()),
+	),
 	)
 	defer span.End()
 

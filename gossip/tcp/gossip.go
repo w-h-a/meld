@@ -26,11 +26,12 @@ const (
 	connReadTimeout = 30 * time.Second
 )
 
+// tcpGossip is a TCP gossip adapter.
 type tcpGossip struct {
 	options   gossip.Options
 	listener  *net.TCPListener
 	peerMtx   sync.RWMutex
-	peers     []string
+	peers     []net.Addr
 	msgCh     chan *gossip.Packet
 	done      chan struct{}
 	wg        sync.WaitGroup
@@ -54,10 +55,13 @@ func New(opts ...gossip.Option) (gossip.Gossip, error) {
 		return nil, err
 	}
 
+	peers := make([]net.Addr, len(options.Peers))
+	copy(peers, options.Peers)
+
 	g := &tcpGossip{
 		options:  options,
 		listener: listener,
-		peers:    options.Peers,
+		peers:    peers,
 		done:     make(chan struct{}),
 		conns:    map[net.Conn]struct{}{},
 		tracer:   otel.Tracer("meld/gossip/tcp"),
@@ -87,20 +91,77 @@ func (g *tcpGossip) Listen(_ context.Context) (<-chan *gossip.Packet, error) {
 	return g.msgCh, nil
 }
 
+// SetPeers replaces the peer list.
+func (g *tcpGossip) SetPeers(ctx context.Context, peers ...net.Addr) error {
+	_, span := g.tracer.Start(ctx, "Gossip.SetPeers", trace.WithAttributes(
+		attribute.String("gossip.transport", "tcp"),
+		attribute.Int("gossip.peers_count", len(peers)),
+	),
+	)
+	defer span.End()
+
+	next := make([]net.Addr, len(peers))
+	copy(next, peers)
+
+	g.peerMtx.Lock()
+	g.peers = next
+	g.peerMtx.Unlock()
+
+	return nil
+}
+
+// SendTo delivers msg to a single peer at addr via TCP.
+func (g *tcpGossip) SendTo(ctx context.Context, addr net.Addr, msg []byte) error {
+	ctx, span := g.tracer.Start(ctx, "Gossip.SendTo", trace.WithAttributes(
+		attribute.String("gossip.direction", "send"),
+		attribute.String("gossip.transport", "tcp"),
+		attribute.String("gossip.peer_address", addr.String()),
+		attribute.Int("gossip.message_bytes", len(msg)),
+	))
+	defer span.End()
+
+	if err := g.sendTo(ctx, addr, msg); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+
+	return nil
+}
+
+// Stop closes the TCP listener, waits for all connection
+// handlers to exit, and closes the message channel. Safe to
+// call multiple times.
+func (g *tcpGossip) Stop(_ context.Context) error {
+	g.once.Do(func() {
+		close(g.done)
+		g.listener.Close()
+		g.connMtx.RLock()
+		for conn := range g.conns {
+			conn.Close()
+		}
+		g.connMtx.RUnlock()
+		g.wg.Wait()
+		if g.msgCh != nil {
+			close(g.msgCh)
+		}
+	})
+	return nil
+}
+
 // Broadcast sends msg to all known peers via TCP.
 func (g *tcpGossip) Broadcast(ctx context.Context, msg []byte) error {
-	ctx, span := g.tracer.Start(ctx, "Gossip.Broadcast",
-		trace.WithAttributes(
-			attribute.String("gossip.direction", "send"),
-			attribute.String("gossip.transport", "tcp"),
-			attribute.Int("gossip.message_bytes", len(msg)),
-			attribute.Int("gossip.fanout", g.options.Fanout),
-		),
+	ctx, span := g.tracer.Start(ctx, "Gossip.Broadcast", trace.WithAttributes(
+		attribute.String("gossip.direction", "send"),
+		attribute.String("gossip.transport", "tcp"),
+		attribute.Int("gossip.message_bytes", len(msg)),
+		attribute.Int("gossip.fanout", g.options.Fanout),
+	),
 	)
 	defer span.End()
 
 	g.peerMtx.RLock()
-	snapshot := make([]string, len(g.peers))
+	snapshot := make([]net.Addr, len(g.peers))
 	copy(snapshot, g.peers)
 	g.peerMtx.RUnlock()
 
@@ -126,7 +187,7 @@ func (g *tcpGossip) Broadcast(ctx context.Context, msg []byte) error {
 
 		if err := g.sendTo(ctx, addr, msg); err != nil {
 			lastErr = err
-			span.RecordError(err, trace.WithAttributes(attribute.String("gossip.peer_address", addr)))
+			span.RecordError(err, trace.WithAttributes(attribute.String("gossip.peer_address", addr.String())))
 			continue
 		}
 
@@ -143,49 +204,9 @@ func (g *tcpGossip) Broadcast(ctx context.Context, msg []byte) error {
 	return nil
 }
 
-// SetPeers replaces the peer list.
-func (g *tcpGossip) SetPeers(ctx context.Context, peers ...string) error {
-	_, span := g.tracer.Start(ctx, "Gossip.SetPeers",
-		trace.WithAttributes(
-			attribute.String("gossip.transport", "tcp"),
-			attribute.Int("gossip.peers_count", len(peers)),
-		),
-	)
-	defer span.End()
-
-	next := make([]string, len(peers))
-	copy(next, peers)
-
-	g.peerMtx.Lock()
-	g.peers = next
-	g.peerMtx.Unlock()
-
-	return nil
-}
-
-// Stop closes the TCP listener, waits for all connection
-// handlers to exit, and closes the message channel. Safe to
-// call multiple times.
-func (g *tcpGossip) Stop(_ context.Context) error {
-	g.once.Do(func() {
-		close(g.done)
-		g.listener.Close()
-		g.connMtx.RLock()
-		for conn := range g.conns {
-			conn.Close()
-		}
-		g.connMtx.RUnlock()
-		g.wg.Wait()
-		if g.msgCh != nil {
-			close(g.msgCh)
-		}
-	})
-	return nil
-}
-
-func (g *tcpGossip) sendTo(ctx context.Context, addr string, msg []byte) error {
+func (g *tcpGossip) sendTo(ctx context.Context, addr net.Addr, msg []byte) error {
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", addr.String())
 	if err != nil {
 		return err
 	}
@@ -223,12 +244,11 @@ func (g *tcpGossip) sendTo(ctx context.Context, addr string, msg []byte) error {
 func (g *tcpGossip) acceptLoop() {
 	defer g.wg.Done()
 
-	ctx, span := g.tracer.Start(g.options.Context, "Gossip.Listen",
-		trace.WithAttributes(
-			attribute.String("gossip.direction", "recv"),
-			attribute.String("gossip.transport", "tcp"),
-			attribute.String("gossip.bind_address", g.listener.Addr().String()),
-		),
+	ctx, span := g.tracer.Start(g.options.Context, "Gossip.Listen", trace.WithAttributes(
+		attribute.String("gossip.direction", "recv"),
+		attribute.String("gossip.transport", "tcp"),
+		attribute.String("gossip.bind_address", g.listener.Addr().String()),
+	),
 	)
 	defer span.End()
 
@@ -326,7 +346,7 @@ func (g *tcpGossip) handleConn(ctx context.Context, conn net.Conn) {
 	if length > maxMessageSize {
 		child.AddEvent("tcp.read_error", trace.WithAttributes(
 			attribute.String("error.message", "message size exceeds limit"),
-			attribute.Int64("gossip.message_bytes", int64(length)),
+			attribute.Int("gossip.message_bytes", int(length)),
 		))
 		return
 	}
