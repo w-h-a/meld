@@ -19,6 +19,58 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestSendTo_DeliversToTargetPeer(t *testing.T) {
+	// arrange
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	receiver, err := udp.New(gossip.WithBindAddress("127.0.0.1:0"))
+	require.NoError(t, err)
+	defer receiver.Stop(ctx)
+
+	sender, err := udp.New(gossip.WithBindAddress("127.0.0.1:0"))
+	require.NoError(t, err)
+	defer sender.Stop(ctx)
+
+	ch, err := receiver.Listen(ctx)
+	require.NoError(t, err)
+
+	want := []byte("point-to-point")
+
+	// act
+	err = sender.SendTo(ctx, receiver.Addr(ctx), want)
+	require.NoError(t, err)
+
+	// assert
+	select {
+	case pkt := <-ch:
+		require.Equal(t, want, pkt.Data)
+		require.Equal(t, sender.Addr(ctx).String(), pkt.From.String())
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for message")
+	}
+}
+
+func TestStop_ClosesChannel(t *testing.T) {
+	// arrange
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	node, err := udp.New()
+	require.NoError(t, err)
+
+	ch, err := node.Listen(ctx)
+	require.NoError(t, err)
+
+	// act
+	err = node.Stop(ctx)
+	require.NoError(t, err)
+
+	// assert
+	_, open := <-ch
+	require.False(t, open)
+}
+
 func TestSetPeers_DynamicAdd(t *testing.T) {
 	// arrange
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -102,58 +154,6 @@ func TestSetPeers_DynamicAdd(t *testing.T) {
 			t.Fatalf("node %d: timed out waiting for message", i)
 		}
 	}
-}
-
-func TestSendTo_DeliversToTargetPeer(t *testing.T) {
-	// arrange
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	receiver, err := udp.New(gossip.WithBindAddress("127.0.0.1:0"))
-	require.NoError(t, err)
-	defer receiver.Stop(ctx)
-
-	sender, err := udp.New(gossip.WithBindAddress("127.0.0.1:0"))
-	require.NoError(t, err)
-	defer sender.Stop(ctx)
-
-	ch, err := receiver.Listen(ctx)
-	require.NoError(t, err)
-
-	want := []byte("point-to-point")
-
-	// act
-	err = sender.SendTo(ctx, receiver.Addr(ctx), want)
-	require.NoError(t, err)
-
-	// assert
-	select {
-	case pkt := <-ch:
-		require.Equal(t, want, pkt.Data)
-		require.Equal(t, sender.Addr(ctx).String(), pkt.From.String())
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for message")
-	}
-}
-
-func TestStop_ClosesChannel(t *testing.T) {
-	// arrange
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	node, err := udp.New()
-	require.NoError(t, err)
-
-	ch, err := node.Listen(ctx)
-	require.NoError(t, err)
-
-	// act
-	err = node.Stop(ctx)
-	require.NoError(t, err)
-
-	// assert
-	_, open := <-ch
-	require.False(t, open)
 }
 
 func TestBroadcast_SmallMessage(t *testing.T) {
