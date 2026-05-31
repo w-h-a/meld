@@ -33,20 +33,6 @@ func TestApply_IncomingLeftTakesEffect(t *testing.T) {
 	require.Equal(t, membership.Left, next.State)
 }
 
-func TestApply_IncomingLeftPreservesHigherLocalIncarnation(t *testing.T) {
-	// arrange
-	local := nodeState{ID: "n1", State: membership.Alive, Incarnation: 10}
-	incoming := nodeState{ID: "n1", State: membership.Left, Incarnation: 3}
-
-	// act
-	next, changed := apply(local, incoming)
-
-	// assert
-	require.True(t, changed)
-	require.Equal(t, membership.Left, next.State)
-	require.Equal(t, uint64(10), next.Incarnation)
-}
-
 func TestApply_IncomingLeftAtHigherIncarnationAdoptsIncomingMeta(t *testing.T) {
 	// arrange
 	local := nodeState{

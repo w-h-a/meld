@@ -27,7 +27,7 @@ type nodeState struct {
 //     is permanent. Any later message about that node is ignored.
 //     - If an incoming message says a node has left, we accept
 //     that even at a lower incarnation than we currently have. We
-//     record the higher of the two incarnantions.
+//     record the higher of the two incarnations.
 //  2. Higher incarnation wins.
 //  3. Failed > Suspect > Alive.
 //
