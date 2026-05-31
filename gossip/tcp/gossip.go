@@ -91,25 +91,6 @@ func (g *tcpGossip) Listen(_ context.Context) (<-chan *gossip.Packet, error) {
 	return g.msgCh, nil
 }
 
-// SetPeers replaces the peer list.
-func (g *tcpGossip) SetPeers(ctx context.Context, peers ...net.Addr) error {
-	_, span := g.tracer.Start(ctx, "Gossip.SetPeers", trace.WithAttributes(
-		attribute.String("gossip.transport", "tcp"),
-		attribute.Int("gossip.peers_count", len(peers)),
-	),
-	)
-	defer span.End()
-
-	next := make([]net.Addr, len(peers))
-	copy(next, peers)
-
-	g.peerMtx.Lock()
-	g.peers = next
-	g.peerMtx.Unlock()
-
-	return nil
-}
-
 // SendTo delivers msg to a single peer at addr via TCP.
 func (g *tcpGossip) SendTo(ctx context.Context, addr net.Addr, msg []byte) error {
 	ctx, span := g.tracer.Start(ctx, "Gossip.SendTo", trace.WithAttributes(
@@ -146,6 +127,25 @@ func (g *tcpGossip) Stop(_ context.Context) error {
 			close(g.msgCh)
 		}
 	})
+	return nil
+}
+
+// SetPeers replaces the peer list.
+func (g *tcpGossip) SetPeers(ctx context.Context, peers ...net.Addr) error {
+	_, span := g.tracer.Start(ctx, "Gossip.SetPeers", trace.WithAttributes(
+		attribute.String("gossip.transport", "tcp"),
+		attribute.Int("gossip.peers_count", len(peers)),
+	),
+	)
+	defer span.End()
+
+	next := make([]net.Addr, len(peers))
+	copy(next, peers)
+
+	g.peerMtx.Lock()
+	g.peers = next
+	g.peerMtx.Unlock()
+
 	return nil
 }
 
