@@ -2,7 +2,6 @@ package gossip
 
 import (
 	"context"
-	"net"
 )
 
 // Option configures a Gossip transport.
@@ -11,16 +10,12 @@ type Option func(*Options)
 // Options hold configuration for a Gossip transport.
 type Options struct {
 	BindAddress string
-	Peers       []net.Addr
-	Fanout      int
 	Context     context.Context
 }
 
 func NewOptions(opts ...Option) Options {
 	options := Options{
 		BindAddress: ":0",
-		Peers:       []net.Addr{},
-		Fanout:      3,
 		Context:     context.Background(),
 	}
 
@@ -36,23 +31,5 @@ func NewOptions(opts ...Option) Options {
 func WithBindAddress(addr string) Option {
 	return func(o *Options) {
 		o.BindAddress = addr
-	}
-}
-
-// WithPeers appends known peer addresses.
-func WithPeers(peers ...net.Addr) Option {
-	return func(o *Options) {
-		o.Peers = append(o.Peers, peers...)
-	}
-}
-
-// WithFanout sets the number of randomly selected peers per
-// Broadcast call.
-func WithFanout(n int) Option {
-	return func(o *Options) {
-		if n < 1 {
-			n = 1
-		}
-		o.Fanout = n
 	}
 }

@@ -1,6 +1,12 @@
 package swim
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+)
 
 // msgType discrimates SWIM protocol messages on the wire.
 type msgType uint8
@@ -23,10 +29,11 @@ const (
 // SeqNo correlates msgAck back to the msgPing that prompted it, and
 // msgIndirectAck back to the msgPingReq that prompted it.
 type envelope struct {
-	Type   msgType   `json:"type"`
-	From   nodeState `json:"from"`
-	Target nodeState `json:"target"`
-	SeqNo  uint64    `json:"seq_no"`
+	Type    msgType           `json:"type"`
+	From    nodeState         `json:"from"`
+	Target  nodeState         `json:"target"`
+	SeqNo   uint64            `json:"seq_no"`
+	Carrier map[string]string `json:"carrier,omitempty"`
 }
 
 func encode(e envelope) ([]byte, error) {
@@ -37,4 +44,18 @@ func decode(b []byte) (envelope, error) {
 	var e envelope
 	err := json.Unmarshal(b, &e)
 	return e, err
+}
+
+func injectTraceContext(ctx context.Context, env *envelope) {
+	if env.Carrier == nil {
+		env.Carrier = map[string]string{}
+	}
+	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(env.Carrier))
+}
+
+func extractTraceContext(ctx context.Context, env envelope) context.Context {
+	if len(env.Carrier) == 0 {
+		return ctx
+	}
+	return otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(env.Carrier))
 }
