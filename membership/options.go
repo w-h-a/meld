@@ -2,6 +2,8 @@ package membership
 
 import (
 	"context"
+
+	"github.com/w-h-a/meld/gossip"
 )
 
 // Option configures a Membership adapter.
@@ -9,10 +11,11 @@ type Option func(*Options)
 
 // Options hold configuration shared by all Membership adapters.
 type Options struct {
-	NodeID      string
-	BindAddress string
-	Meta        map[string]string
-	Context     context.Context
+	Gossip           gossip.Gossip
+	NodeID           string
+	AdvertiseAddress string
+	Meta             map[string]string
+	Context          context.Context
 }
 
 func NewOptions(opts ...Option) Options {
@@ -28,6 +31,14 @@ func NewOptions(opts ...Option) Options {
 	return options
 }
 
+// WithGossip sets the gossip transport used by the adapter for
+// probes, acks, and broadcast dissemination. Required.
+func WithGossip(g gossip.Gossip) Option {
+	return func(o *Options) {
+		o.Gossip = g
+	}
+}
+
 // WithNodeID sets the local node's identity. Required.
 func WithNodeID(id string) Option {
 	return func(o *Options) {
@@ -35,11 +46,14 @@ func WithNodeID(id string) Option {
 	}
 }
 
-// WithBindAddress sets the address advertised to peers. When
-// empty, the adapter will fall back to its transport's bound address.
-func WithBindAddress(addr string) Option {
+// WithAdvertiseAddress sets the address this node tells peers to
+// use to reach it. Distinct from the gossip transport's bind
+// address: bind is the local interface to listen on (often
+// "0.0.0.0:port"); advertise is what we put on the wire so peers
+// can send to us.
+func WithAdvertiseAddress(addr string) Option {
 	return func(o *Options) {
-		o.BindAddress = addr
+		o.AdvertiseAddress = addr
 	}
 }
 

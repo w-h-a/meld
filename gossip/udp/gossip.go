@@ -4,7 +4,6 @@ package udp
 import (
 	"context"
 	"errors"
-	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -21,8 +20,6 @@ type udpGossip struct {
 	options   gossip.Options
 	mtu       int
 	udpConn   *net.UDPConn
-	peerMtx   sync.RWMutex
-	peers     []net.Addr
 	msgCh     chan *gossip.Packet
 	done      chan struct{}
 	wg        sync.WaitGroup
@@ -44,14 +41,10 @@ func New(opts ...gossip.Option) (gossip.Gossip, error) {
 		return nil, err
 	}
 
-	peers := make([]net.Addr, len(options.Peers))
-	copy(peers, options.Peers)
-
 	g := &udpGossip{
 		options: options,
 		mtu:     mtuFrom(options.Context),
 		udpConn: conn,
-		peers:   peers,
 		done:    make(chan struct{}),
 		tracer:  otel.Tracer("meld/gossip/udp"),
 	}
@@ -118,32 +111,17 @@ func (g *udpGossip) Stop(_ context.Context) error {
 	return nil
 }
 
-// SetPeers replaces the peer list.
-func (g *udpGossip) SetPeers(ctx context.Context, peers ...net.Addr) error {
-	_, span := g.tracer.Start(ctx, "Gossip.SetPeers", trace.WithAttributes(
-		attribute.String("gossip.transport", "udp"),
-		attribute.Int("gossip.peers_count", len(peers)),
-	),
-	)
-	defer span.End()
-
-	next := make([]net.Addr, len(peers))
-	copy(next, peers)
-
-	g.peerMtx.Lock()
-	g.peers = next
-	g.peerMtx.Unlock()
-
-	return nil
+func (g *udpGossip) Resolve(s string) (net.Addr, error) {
+	return net.ResolveUDPAddr("udp", s)
 }
 
 // Broadcast sends msg to all known peers via UDP.
-func (g *udpGossip) Broadcast(ctx context.Context, msg []byte) error {
+func (g *udpGossip) Broadcast(ctx context.Context, peers []net.Addr, msg []byte) error {
 	ctx, span := g.tracer.Start(ctx, "Gossip.Broadcast", trace.WithAttributes(
 		attribute.String("gossip.direction", "send"),
 		attribute.String("gossip.transport", "udp"),
 		attribute.Int("gossip.message_bytes", len(msg)),
-		attribute.Int("gossip.fanout", g.options.Fanout),
+		attribute.Int("gossip.peers_count", len(peers)),
 	),
 	)
 	defer span.End()
@@ -152,27 +130,10 @@ func (g *udpGossip) Broadcast(ctx context.Context, msg []byte) error {
 		return errors.New("message exceeds MTU")
 	}
 
-	g.peerMtx.RLock()
-	snapshot := make([]net.Addr, len(g.peers))
-	copy(snapshot, g.peers)
-	g.peerMtx.RUnlock()
-
-	span.SetAttributes(attribute.Int("gossip.peers_available", len(snapshot)))
-
-	n := min(g.options.Fanout, len(snapshot))
-
-	for i := range n {
-		j := i + rand.IntN(len(snapshot)-i)
-		snapshot[i], snapshot[j] = snapshot[j], snapshot[i]
-	}
-	targets := snapshot[:n]
-
-	span.SetAttributes(attribute.Int("gossip.peers_selected", n))
-
 	var lastErr error
 	sent := 0
 
-	for _, addr := range targets {
+	for _, addr := range peers {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

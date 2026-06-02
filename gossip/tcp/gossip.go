@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -30,8 +29,6 @@ const (
 type tcpGossip struct {
 	options   gossip.Options
 	listener  *net.TCPListener
-	peerMtx   sync.RWMutex
-	peers     []net.Addr
 	msgCh     chan *gossip.Packet
 	done      chan struct{}
 	wg        sync.WaitGroup
@@ -55,13 +52,9 @@ func New(opts ...gossip.Option) (gossip.Gossip, error) {
 		return nil, err
 	}
 
-	peers := make([]net.Addr, len(options.Peers))
-	copy(peers, options.Peers)
-
 	g := &tcpGossip{
 		options:  options,
 		listener: listener,
-		peers:    peers,
 		done:     make(chan struct{}),
 		conns:    map[net.Conn]struct{}{},
 		tracer:   otel.Tracer("meld/gossip/tcp"),
@@ -130,57 +123,25 @@ func (g *tcpGossip) Stop(_ context.Context) error {
 	return nil
 }
 
-// SetPeers replaces the peer list.
-func (g *tcpGossip) SetPeers(ctx context.Context, peers ...net.Addr) error {
-	_, span := g.tracer.Start(ctx, "Gossip.SetPeers", trace.WithAttributes(
+func (g *tcpGossip) Resolve(s string) (net.Addr, error) {
+	return net.ResolveTCPAddr("tcp", s)
+}
+
+// Broadcast sends msg to all known peers via TCP.
+func (g *tcpGossip) Broadcast(ctx context.Context, peers []net.Addr, msg []byte) error {
+	ctx, span := g.tracer.Start(ctx, "Gossip.Broadcast", trace.WithAttributes(
+		attribute.String("gossip.direction", "send"),
 		attribute.String("gossip.transport", "tcp"),
+		attribute.Int("gossip.message_bytes", len(msg)),
 		attribute.Int("gossip.peers_count", len(peers)),
 	),
 	)
 	defer span.End()
 
-	next := make([]net.Addr, len(peers))
-	copy(next, peers)
-
-	g.peerMtx.Lock()
-	g.peers = next
-	g.peerMtx.Unlock()
-
-	return nil
-}
-
-// Broadcast sends msg to all known peers via TCP.
-func (g *tcpGossip) Broadcast(ctx context.Context, msg []byte) error {
-	ctx, span := g.tracer.Start(ctx, "Gossip.Broadcast", trace.WithAttributes(
-		attribute.String("gossip.direction", "send"),
-		attribute.String("gossip.transport", "tcp"),
-		attribute.Int("gossip.message_bytes", len(msg)),
-		attribute.Int("gossip.fanout", g.options.Fanout),
-	),
-	)
-	defer span.End()
-
-	g.peerMtx.RLock()
-	snapshot := make([]net.Addr, len(g.peers))
-	copy(snapshot, g.peers)
-	g.peerMtx.RUnlock()
-
-	span.SetAttributes(attribute.Int("gossip.peers_available", len(snapshot)))
-
-	n := min(g.options.Fanout, len(snapshot))
-
-	for i := range n {
-		j := i + rand.IntN(len(snapshot)-i)
-		snapshot[i], snapshot[j] = snapshot[j], snapshot[i]
-	}
-	targets := snapshot[:n]
-
-	span.SetAttributes(attribute.Int("gossip.peers_selected", n))
-
 	var lastErr error
 	sent := 0
 
-	for _, addr := range targets {
+	for _, addr := range peers {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

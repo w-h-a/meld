@@ -14,11 +14,10 @@ type Packet struct {
 	Data []byte
 }
 
-// Gossip is the port interface for state propagation.
+// Gossip is the port interface for state broadcasting.
 type Gossip interface {
 	Transport
-	SetPeers(ctx context.Context, peers ...net.Addr) error
-	Broadcast(ctx context.Context, msg []byte) error
+	Broadcast(ctx context.Context, peers []net.Addr, msg []byte) error
 }
 
 // Transport is the minimum needed for point-to-point messaging.
@@ -27,4 +26,5 @@ type Transport interface {
 	Listen(ctx context.Context) (<-chan *Packet, error)
 	SendTo(ctx context.Context, addr net.Addr, msg []byte) error
 	Stop(ctx context.Context) error
+	Resolve(s string) (net.Addr, error)
 }
