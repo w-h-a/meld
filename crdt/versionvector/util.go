@@ -1,4 +1,4 @@
-package vclock
+package versionvector
 
 func breakTie(a, b []counter) int {
 	n := min(len(b), len(a))

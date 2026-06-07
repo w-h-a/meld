@@ -1,10 +1,10 @@
-// Package vclock implements version vectors for causal ordering.
+// Package versionvector implements version vectors for causal ordering.
 // No wall clocks. Monotonically increasing per node.
 //
 // References:
 //   - Lamport, "Time, Clocks, and the Ordering of Events" (1978)
 //   - DDIA chapter 5 (detecting concurrent writes)
-package vclock
+package versionvector
 
 import (
 	"encoding/binary"
@@ -14,21 +14,21 @@ import (
 	"github.com/w-h-a/meld/crdt"
 )
 
-// Make sure VectorClock satisfies crdt.Mergeable.
-var _ crdt.Mergeable[VectorClock] = VectorClock{}
+// Make sure VersionVector satisfies crdt.Mergeable.
+var _ crdt.Mergeable[VersionVector] = VersionVector{}
 
-// VectorClock summarizes the events one replica has seen in a
+// VersionVector summarizes the events one replica has seen in a
 // distributed system.
-type VectorClock struct {
+type VersionVector struct {
 	entries []counter
 }
 
-func New() VectorClock {
-	return VectorClock{}
+func New() VersionVector {
+	return VersionVector{}
 }
 
 // Get returns the counter for nodeID, or 0 if nodeID is absent
-func (v VectorClock) Get(nodeID string) uint64 {
+func (v VersionVector) Get(nodeID string) uint64 {
 	i := sort.Search(len(v.entries), func(i int) bool {
 		return v.entries[i].id >= nodeID
 	})
@@ -43,7 +43,7 @@ func (v VectorClock) Get(nodeID string) uint64 {
 // Increment returns a new vector with nodeID's counter raised by 1.
 // The receiver is not modified; so, vectors are safe to share across
 // routines and the wire. Callers pass their own node id and only their own.
-func (v VectorClock) Increment(nodeID string) VectorClock {
+func (v VersionVector) Increment(nodeID string) VersionVector {
 	i := sort.Search(len(v.entries), func(i int) bool {
 		return v.entries[i].id >= nodeID
 	})
@@ -53,7 +53,7 @@ func (v VectorClock) Increment(nodeID string) VectorClock {
 		copy(out, v.entries)
 		out[i].value++
 
-		return VectorClock{entries: out}
+		return VersionVector{entries: out}
 	}
 
 	out := make([]counter, len(v.entries)+1)
@@ -61,19 +61,19 @@ func (v VectorClock) Increment(nodeID string) VectorClock {
 	out[i] = counter{id: nodeID, value: 1}
 	copy(out[i+1:], v.entries[i:])
 
-	return VectorClock{entries: out}
+	return VersionVector{entries: out}
 }
 
 // Clone returns a deep copy.
-func (v VectorClock) Clone() VectorClock {
+func (v VersionVector) Clone() VersionVector {
 	if len(v.entries) == 0 {
-		return VectorClock{}
+		return VersionVector{}
 	}
 
 	out := make([]counter, len(v.entries))
 	copy(out, v.entries)
 
-	return VectorClock{entries: out}
+	return VersionVector{entries: out}
 }
 
 // Compare returns the causal relationship of v to other. The four
@@ -113,7 +113,7 @@ func (v VectorClock) Clone() VectorClock {
 // counters wins. If the sums are equal, the sorted entries are walked
 // and at each position the larger id wins, then the larger value, with
 // the longer slice winning if every shared position matched.
-func (v VectorClock) Compare(other VectorClock) Ordering {
+func (v VersionVector) Compare(other VersionVector) Ordering {
 	var hasGreater, hasLesser bool
 	var vSum, oSum uint64
 
@@ -190,7 +190,7 @@ func (v VectorClock) Compare(other VectorClock) Ordering {
 // does not matter. Merge is associative; so, a replica can fold
 // many messages together in any grouping. Merge is idempotent; so,
 // a duplicate message has no effect.
-func (v VectorClock) Merge(other VectorClock) VectorClock {
+func (v VersionVector) Merge(other VersionVector) VersionVector {
 	out := make([]counter, 0, len(v.entries)+len(other.entries))
 
 	i, j := 0, 0
@@ -214,13 +214,13 @@ func (v VectorClock) Merge(other VectorClock) VectorClock {
 	out = append(out, v.entries[i:]...)
 	out = append(out, other.entries[j:]...)
 
-	return VectorClock{entries: out}
+	return VersionVector{entries: out}
 }
 
 // Marshal encodes the vector for persistence or the wire.
 // Format: uvarint(entry count), then per-entry uvarint(idLen), idBytes,
 // and uvarint(value).
-func (v VectorClock) Marshal() ([]byte, error) {
+func (v VersionVector) Marshal() ([]byte, error) {
 	buf := make([]byte, 0, 1+len(v.entries)*12)
 	buf = binary.AppendUvarint(buf, uint64(len(v.entries)))
 
@@ -235,16 +235,16 @@ func (v VectorClock) Marshal() ([]byte, error) {
 
 // Unmarshal parses the byte form into the receiver and validates
 // the invariants.
-func (v *VectorClock) Unmarshal(data []byte) error {
+func (v *VersionVector) Unmarshal(data []byte) error {
 	count, n := binary.Uvarint(data)
 	if n <= 0 {
-		return errors.New("vclock: invalid count")
+		return errors.New("versionvector: invalid count")
 	}
 
 	data = data[n:]
 
 	if count > uint64(len(data)) {
-		return errors.New("vclock: count exceeds remaining data")
+		return errors.New("versionvector: count exceeds remaining data")
 	}
 
 	out := make([]counter, 0, count)
@@ -253,13 +253,13 @@ func (v *VectorClock) Unmarshal(data []byte) error {
 	for k := range count {
 		idLen, n := binary.Uvarint(data)
 		if n <= 0 {
-			return errors.New("vclock: invalid id length")
+			return errors.New("versionvector: invalid id length")
 		}
 
 		data = data[n:]
 
 		if uint64(len(data)) < idLen {
-			return errors.New("vclock: id bytes truncated")
+			return errors.New("versionvector: id bytes truncated")
 		}
 
 		id := string(data[:idLen])
@@ -268,17 +268,17 @@ func (v *VectorClock) Unmarshal(data []byte) error {
 
 		val, n := binary.Uvarint(data)
 		if n <= 0 {
-			return errors.New("vclock: invalid value")
+			return errors.New("versionvector: invalid value")
 		}
 
 		data = data[n:]
 
 		if val == 0 {
-			return errors.New("vclock: zero-valued entry violates invariant")
+			return errors.New("versionvector: zero-valued entry violates invariant")
 		}
 
 		if k > 0 && id <= prev {
-			return errors.New("vclock: entries not sorted by id")
+			return errors.New("versionvector: entries not sorted by id")
 		}
 
 		prev = id

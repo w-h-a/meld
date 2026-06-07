@@ -1,4 +1,4 @@
-package vclock
+package versionvector
 
 // Ordering is the result of Compare. The five values name the
 // possible causal relationships between two version vectors. Names

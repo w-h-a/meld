@@ -1,17 +1,17 @@
-package vclock_test
+package versionvector_test
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/w-h-a/meld/crdt/vclock"
+	"github.com/w-h-a/meld/crdt/versionvector"
 )
 
 // --- get, increment, and clone ---
 
 func TestVersionVector_GetReturnsZeroForAbsent(t *testing.T) {
 	// arrange
-	v := vclock.New().Increment("n1")
+	v := versionvector.New().Increment("n1")
 
 	// act
 	value := v.Get("never-seen")
@@ -22,7 +22,7 @@ func TestVersionVector_GetReturnsZeroForAbsent(t *testing.T) {
 
 func TestVersionVector_IncrementMonotonicAndImmutability(t *testing.T) {
 	// arrange
-	a := vclock.New()
+	a := versionvector.New()
 
 	// act
 	b := a.Increment("n1")
@@ -32,34 +32,34 @@ func TestVersionVector_IncrementMonotonicAndImmutability(t *testing.T) {
 	require.Equal(t, uint64(0), a.Get("n1"))
 	require.Equal(t, uint64(1), b.Get("n1"))
 	require.Equal(t, uint64(2), c.Get("n1"))
-	require.Equal(t, vclock.Greater, c.Compare(b))
-	require.Equal(t, vclock.Greater, b.Compare(a))
+	require.Equal(t, versionvector.Greater, c.Compare(b))
+	require.Equal(t, versionvector.Greater, b.Compare(a))
 }
 
 func TestVersionVector_CloneIsEqual(t *testing.T) {
 	// arrange
-	og := vclock.New().Increment("n1").Increment("n2")
+	og := versionvector.New().Increment("n1").Increment("n2")
 	clone := og.Clone()
 
 	// act + assert
-	require.Equal(t, vclock.Equal, og.Compare(clone))
+	require.Equal(t, versionvector.Equal, og.Compare(clone))
 }
 
 // --- compare causal ordering ---
 
 func TestVersionVector_EqualWhenAllCountersMatch(t *testing.T) {
 	// arrange
-	a := vclock.New().Increment("n1").Increment("n2").Increment("n1")
-	b := vclock.New().Increment("n2").Increment("n1").Increment("n1")
+	a := versionvector.New().Increment("n1").Increment("n2").Increment("n1")
+	b := versionvector.New().Increment("n2").Increment("n1").Increment("n1")
 
 	// act + assert
-	require.Equal(t, vclock.Equal, a.Compare(b))
-	require.Equal(t, vclock.Equal, b.Compare(a))
+	require.Equal(t, versionvector.Equal, a.Compare(b))
+	require.Equal(t, versionvector.Equal, b.Compare(a))
 }
 
 func TestVersionVector_LaterDominatesEarlier(t *testing.T) {
 	// arrange
-	earlier := vclock.New().Increment("n1")
+	earlier := versionvector.New().Increment("n1")
 	later := earlier.Increment("n1").Increment("n2")
 
 	// act
@@ -67,15 +67,15 @@ func TestVersionVector_LaterDominatesEarlier(t *testing.T) {
 	reverse := earlier.Compare(later)
 
 	// assert
-	require.Equal(t, vclock.Greater, forward)
-	require.Equal(t, vclock.Lesser, reverse)
+	require.Equal(t, versionvector.Greater, forward)
+	require.Equal(t, versionvector.Lesser, reverse)
 }
 
 func TestVersionVector_NeitherDominatesWhenConcurrent(t *testing.T) {
 	// arrange
-	a := vclock.New().Increment("n1")
-	b := vclock.New().Increment("n2")
-	concurrent := []vclock.Ordering{vclock.ConcurrentGreater, vclock.ConcurrentLesser}
+	a := versionvector.New().Increment("n1")
+	b := versionvector.New().Increment("n2")
+	concurrent := []versionvector.Ordering{versionvector.ConcurrentGreater, versionvector.ConcurrentLesser}
 
 	// act + assert
 	require.Contains(t, concurrent, a.Compare(b))
@@ -84,8 +84,8 @@ func TestVersionVector_NeitherDominatesWhenConcurrent(t *testing.T) {
 
 func TestVersionVector_AntisymmetricWhenConcurrent(t *testing.T) {
 	// arrange
-	a := vclock.New().Increment("n1").Increment("n2").Increment("n2").Increment("n2")
-	b := vclock.New().Increment("n1").Increment("n1").Increment("n1").Increment("n2")
+	a := versionvector.New().Increment("n1").Increment("n2").Increment("n2").Increment("n2")
+	b := versionvector.New().Increment("n1").Increment("n1").Increment("n1").Increment("n2")
 
 	// act
 	ab := a.Compare(b)
@@ -99,20 +99,20 @@ func TestVersionVector_AntisymmetricWhenConcurrent(t *testing.T) {
 
 func TestVersionVector_MergeKeepsDominator(t *testing.T) {
 	// arrange
-	earlier := vclock.New().Increment("n1")
+	earlier := versionvector.New().Increment("n1")
 	later := earlier.Increment("n2")
 
 	// act
 	merged := earlier.Merge(later)
 
 	// assert
-	require.Equal(t, vclock.Equal, merged.Compare(later))
+	require.Equal(t, versionvector.Equal, merged.Compare(later))
 }
 
 func TestVersionVector_MergeConcurrentRecordsBoth(t *testing.T) {
 	// arrange
-	a := vclock.New().Increment("n1")
-	b := vclock.New().Increment("n2")
+	a := versionvector.New().Increment("n1")
+	b := versionvector.New().Increment("n2")
 
 	// act
 	merged := a.Merge(b)
@@ -120,36 +120,36 @@ func TestVersionVector_MergeConcurrentRecordsBoth(t *testing.T) {
 	// assert
 	require.Equal(t, uint64(1), merged.Get("n1"))
 	require.Equal(t, uint64(1), merged.Get("n2"))
-	require.Equal(t, vclock.Greater, merged.Compare(a))
-	require.Equal(t, vclock.Greater, merged.Compare(b))
+	require.Equal(t, versionvector.Greater, merged.Compare(a))
+	require.Equal(t, versionvector.Greater, merged.Compare(b))
 }
 
 func TestVersionVector_MergeIsCommutative(t *testing.T) {
 	// Order of arguments does not matter.
 	cases := []struct {
 		name string
-		a    vclock.VectorClock
-		b    vclock.VectorClock
+		a    versionvector.VersionVector
+		b    versionvector.VersionVector
 	}{
 		{
 			"disjoint ids",
-			vclock.New().Increment("n1"),
-			vclock.New().Increment("n2"),
+			versionvector.New().Increment("n1"),
+			versionvector.New().Increment("n2"),
 		},
 		{
 			"overlapping ids with different counters",
-			vclock.New().Increment("n1").Increment("n1").Increment("n2"),
-			vclock.New().Increment("n1").Increment("n2").Increment("n2"),
+			versionvector.New().Increment("n1").Increment("n1").Increment("n2"),
+			versionvector.New().Increment("n1").Increment("n2").Increment("n2"),
 		},
 		{
 			"one input empty",
-			vclock.New(),
-			vclock.New().Increment("n1").Increment("n2"),
+			versionvector.New(),
+			versionvector.New().Increment("n1").Increment("n2"),
 		},
 		{
 			"both inputs empty",
-			vclock.New(),
-			vclock.New(),
+			versionvector.New(),
+			versionvector.New(),
 		},
 	}
 
@@ -160,7 +160,7 @@ func TestVersionVector_MergeIsCommutative(t *testing.T) {
 			ba := c.b.Merge(c.a)
 
 			// assert
-			require.Equal(t, vclock.Equal, ab.Compare(ba))
+			require.Equal(t, versionvector.Equal, ab.Compare(ba))
 		})
 	}
 }
@@ -169,25 +169,25 @@ func TestVersionVector_MergeIsAssociative(t *testing.T) {
 	// Grouping does not matter.
 	cases := []struct {
 		name    string
-		a, b, c vclock.VectorClock
+		a, b, c versionvector.VersionVector
 	}{
 		{
 			"disjoint ids across all three",
-			vclock.New().Increment("n1"),
-			vclock.New().Increment("n2"),
-			vclock.New().Increment("n3"),
+			versionvector.New().Increment("n1"),
+			versionvector.New().Increment("n2"),
+			versionvector.New().Increment("n3"),
 		},
 		{
 			"overlapping ids, each side higher on a different one",
-			vclock.New().Increment("n1").Increment("n1"),
-			vclock.New().Increment("n1").Increment("n2"),
-			vclock.New().Increment("n2").Increment("n3"),
+			versionvector.New().Increment("n1").Increment("n1"),
+			versionvector.New().Increment("n1").Increment("n2"),
+			versionvector.New().Increment("n2").Increment("n3"),
 		},
 		{
 			"one input empty",
-			vclock.New(),
-			vclock.New().Increment("n1"),
-			vclock.New().Increment("n2"),
+			versionvector.New(),
+			versionvector.New().Increment("n1"),
+			versionvector.New().Increment("n2"),
 		},
 	}
 
@@ -198,7 +198,7 @@ func TestVersionVector_MergeIsAssociative(t *testing.T) {
 			right := c.a.Merge(c.b.Merge(c.c))
 
 			// assert
-			require.Equal(t, vclock.Equal, left.Compare(right))
+			require.Equal(t, versionvector.Equal, left.Compare(right))
 		})
 	}
 }
@@ -208,22 +208,22 @@ func TestVersionVector_MergeIsIdempotent(t *testing.T) {
 	// once.
 	cases := []struct {
 		name string
-		a, b vclock.VectorClock
+		a, b versionvector.VersionVector
 	}{
 		{
 			"merging an empty value",
-			vclock.New().Increment("n1").Increment("n2"),
-			vclock.New(),
+			versionvector.New().Increment("n1").Increment("n2"),
+			versionvector.New(),
 		},
 		{
 			"merging a disjoint id",
-			vclock.New().Increment("n1"),
-			vclock.New().Increment("n2"),
+			versionvector.New().Increment("n1"),
+			versionvector.New().Increment("n2"),
 		},
 		{
 			"merging a strictly later value",
-			vclock.New().Increment("n1"),
-			vclock.New().Increment("n1").Increment("n1"),
+			versionvector.New().Increment("n1"),
+			versionvector.New().Increment("n1").Increment("n1"),
 		},
 	}
 	for _, c := range cases {
@@ -233,7 +233,7 @@ func TestVersionVector_MergeIsIdempotent(t *testing.T) {
 			twice := once.Merge(c.b)
 
 			// assert
-			require.Equal(t, vclock.Equal, once.Compare(twice))
+			require.Equal(t, versionvector.Equal, once.Compare(twice))
 		})
 	}
 }
@@ -241,25 +241,25 @@ func TestVersionVector_MergeIsIdempotent(t *testing.T) {
 func TestVersionVector_MergeNeverLosesInformationFromEitherInput(t *testing.T) {
 	cases := []struct {
 		name        string
-		a, b        vclock.VectorClock
+		a, b        versionvector.VersionVector
 		expectedMax map[string]uint64
 	}{
 		{
 			"disjoint ids",
-			vclock.New().Increment("n1"),
-			vclock.New().Increment("n2"),
+			versionvector.New().Increment("n1"),
+			versionvector.New().Increment("n2"),
 			map[string]uint64{"n1": 1, "n2": 1},
 		},
 		{
 			"overlapping ids with different counters",
-			vclock.New().Increment("n1").Increment("n2"),
-			vclock.New().Increment("n1").Increment("n1"),
+			versionvector.New().Increment("n1").Increment("n2"),
+			versionvector.New().Increment("n1").Increment("n1"),
 			map[string]uint64{"n1": 2, "n2": 1},
 		},
 		{
 			"one input empty",
-			vclock.New(),
-			vclock.New().Increment("n1"),
+			versionvector.New(),
+			versionvector.New().Increment("n1"),
 			map[string]uint64{"n1": 1},
 		},
 	}
@@ -281,37 +281,37 @@ func TestVersionVector_MergeNeverLosesInformationFromEitherInput(t *testing.T) {
 
 func TestVersionVector_MarshalUnmarshalRoundTrip(t *testing.T) {
 	// arrange
-	original := vclock.New().Increment("n1").Increment("n2").Increment("n1")
+	original := versionvector.New().Increment("n1").Increment("n2").Increment("n1")
 
 	// act
 	bytes, err := original.Marshal()
 	require.NoError(t, err)
-	var decoded vclock.VectorClock
+	var decoded versionvector.VersionVector
 	require.NoError(t, decoded.Unmarshal(bytes))
 
 	// assert
-	require.Equal(t, vclock.Equal, original.Compare(decoded))
+	require.Equal(t, versionvector.Equal, original.Compare(decoded))
 	require.Equal(t, original.Get("n1"), decoded.Get("n1"))
 	require.Equal(t, original.Get("n2"), decoded.Get("n2"))
 }
 
 func TestVersionVector_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
 	// arrange
-	original := vclock.New()
+	original := versionvector.New()
 
 	// act
 	bytes, err := original.Marshal()
 	require.NoError(t, err)
-	var decoded vclock.VectorClock
+	var decoded versionvector.VersionVector
 	require.NoError(t, decoded.Unmarshal(bytes))
 
 	// assert
-	require.Equal(t, vclock.Equal, original.Compare(decoded))
+	require.Equal(t, versionvector.Equal, original.Compare(decoded))
 }
 
 func TestVersionVector_UnmarshalRejectsEmptyInput(t *testing.T) {
 	// arrange
-	var v vclock.VectorClock
+	var v versionvector.VersionVector
 
 	// act
 	err := v.Unmarshal(nil)
@@ -323,7 +323,7 @@ func TestVersionVector_UnmarshalRejectsEmptyInput(t *testing.T) {
 func TestVersionVector_UnmarshalRejectsTruncatedIDBytes(t *testing.T) {
 	// arrange. count=1, idLen=10, no id payload.
 	bytes := []byte{0x01, 0x0a}
-	var v vclock.VectorClock
+	var v versionvector.VersionVector
 
 	// act
 	err := v.Unmarshal(bytes)
@@ -335,7 +335,7 @@ func TestVersionVector_UnmarshalRejectsTruncatedIDBytes(t *testing.T) {
 func TestVersionVector_UnmarshalRejectsZeroValuedEntry(t *testing.T) {
 	// arrange. count=1, idLen=2, id="n1", value=0.
 	bytes := []byte{0x01, 0x02, 'n', '1', 0x00}
-	var v vclock.VectorClock
+	var v versionvector.VersionVector
 
 	// act
 	err := v.Unmarshal(bytes)
@@ -351,7 +351,7 @@ func TestVersionVector_UnmarshalRejectsUnsortedEntries(t *testing.T) {
 		0x02, 'n', '2', 0x01,
 		0x02, 'n', '1', 0x01,
 	}
-	var v vclock.VectorClock
+	var v versionvector.VersionVector
 
 	// act
 	err := v.Unmarshal(bytes)
@@ -367,7 +367,7 @@ func TestVersionVector_UnmarshalRejectsDuplicateEntries(t *testing.T) {
 		0x02, 'n', '1', 0x01,
 		0x02, 'n', '1', 0x02,
 	}
-	var v vclock.VectorClock
+	var v versionvector.VersionVector
 
 	// act
 	err := v.Unmarshal(bytes)
@@ -379,7 +379,7 @@ func TestVersionVector_UnmarshalRejectsDuplicateEntries(t *testing.T) {
 func TestVersionVector_UnmarshalRejectsHugeCount(t *testing.T) {
 	// arrange. count = 2^57 (huge varint), then empty body.
 	bytes := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01}
-	var v vclock.VectorClock
+	var v versionvector.VersionVector
 
 	// act
 	err := v.Unmarshal(bytes)
