@@ -98,7 +98,7 @@ func (v VersionVector) Clone() VersionVector {
 // v has seen one more n1 event than other and one n2 event that other
 // has not heard about. So v.Compare(other) returns Greater.
 //
-// Lesser. the mirror of Greater.
+// Lesser. The mirror of Greater.
 //
 // ConcurrentGreater or ConcurrentLesser. Some counters favor v and
 // some favor other. The replicas diverged. Each one saw events the
