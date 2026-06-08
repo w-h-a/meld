@@ -277,7 +277,7 @@ func TestVersionVector_MergeNeverLosesInformationFromEitherInput(t *testing.T) {
 	}
 }
 
-// --- marshal/unmarshal ---
+// --- marshal / unmarshal ---
 
 func TestVersionVector_MarshalUnmarshalRoundTrip(t *testing.T) {
 	// arrange
