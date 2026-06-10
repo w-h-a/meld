@@ -16,19 +16,19 @@ import (
 // Make sure Set satisfies crdt.Mergeable. The witness uses a
 // concrete instantiation because Go generics require one for a
 // compile-time interface check.
-var _ crdt.Mergeable[Set[struct{}]] = Set[struct{}]{}
+var _ crdt.Mergeable[ORSet[struct{}]] = ORSet[struct{}]{}
 
-// Set is the optimized state-based Observed-Remove Set. It holds
+// ORSet is the optimized state-based Observed-Remove Set. It holds
 // a live G(row only)-Set of (element, nodeID, counter) triples and a
 // version vector that records, for each nodeID, the highest counter
-// ever observed at this Set.
-type Set[T comparable] struct {
+// ever observed at this ORSet.
+type ORSet[T comparable] struct {
 	live   map[triple[T]]struct{}
 	vector versionvector.VersionVector
 }
 
-func New[T comparable]() Set[T] {
-	return Set[T]{}
+func New[T comparable]() ORSet[T] {
+	return ORSet[T]{}
 }
 
 // Add returns a new Set with element added under a fresh unique
@@ -45,7 +45,7 @@ func New[T comparable]() Set[T] {
 // coalesced. Only the highest-counter triple survives in live
 // because it subsumes the earlier ones. So local state stays
 // bounded.
-func (s Set[T]) Add(nodeID string, element T) Set[T] {
+func (s ORSet[T]) Add(nodeID string, element T) ORSet[T] {
 	nextV := s.vector.Increment(nodeID)
 	counter := nextV.Get(nodeID)
 
@@ -53,7 +53,7 @@ func (s Set[T]) Add(nodeID string, element T) Set[T] {
 	newLive[triple[T]{element: element, nodeID: nodeID, counter: counter}] = struct{}{}
 	newLive = coalesce(newLive)
 
-	return Set[T]{live: newLive, vector: nextV}
+	return ORSet[T]{live: newLive, vector: nextV}
 }
 
 // Remove returns a new Set with every (element, *, *) triple
@@ -66,7 +66,7 @@ func (s Set[T]) Add(nodeID string, element T) Set[T] {
 // is treated by Merge as removed and dropped from the union.
 //
 // The receiver is not modified.
-func (s Set[T]) Remove(element T) Set[T] {
+func (s ORSet[T]) Remove(element T) ORSet[T] {
 	newLive := make(map[triple[T]]struct{}, len(s.live))
 
 	for t := range s.live {
@@ -76,11 +76,11 @@ func (s Set[T]) Remove(element T) Set[T] {
 		newLive[t] = struct{}{}
 	}
 
-	return Set[T]{live: newLive, vector: s.vector}
+	return ORSet[T]{live: newLive, vector: s.vector}
 }
 
 // Contains reports whether element appears in any live triple.
-func (s Set[T]) Contains(element T) bool {
+func (s ORSet[T]) Contains(element T) bool {
 	for t := range s.live {
 		if t.element == element {
 			return true
@@ -91,7 +91,7 @@ func (s Set[T]) Contains(element T) bool {
 }
 
 // Elements returns the distinct live members in unspecified order.
-func (s Set[T]) Elements() []T {
+func (s ORSet[T]) Elements() []T {
 	seen := make(map[T]struct{})
 	for t := range s.live {
 		seen[t.element] = struct{}{}
@@ -106,8 +106,8 @@ func (s Set[T]) Elements() []T {
 }
 
 // Clone returns a deep copy.
-func (s Set[T]) Clone() Set[T] {
-	return Set[T]{
+func (s ORSet[T]) Clone() ORSet[T] {
+	return ORSet[T]{
 		live:   copyTriples(s.live, 0),
 		vector: s.vector.Clone(),
 	}
@@ -145,7 +145,7 @@ func (s Set[T]) Clone() Set[T] {
 // triple's counter is 2, so c > V[n]. n2 has never observed
 // counter 2 at n1, so it could not have removed it. Keep.
 // Contains("nginx") is true after merge. The concurrent add wins.
-func (s Set[T]) Merge(other Set[T]) Set[T] {
+func (s ORSet[T]) Merge(other ORSet[T]) ORSet[T] {
 	mergedV := s.vector.Merge(other.vector)
 	union := make(map[triple[T]]struct{}, len(s.live)+len(other.live))
 
@@ -181,7 +181,7 @@ func (s Set[T]) Merge(other Set[T]) Set[T] {
 		// record; so, drop it.
 	}
 
-	return Set[T]{live: coalesce(union), vector: mergedV}
+	return ORSet[T]{live: coalesce(union), vector: mergedV}
 }
 
 // Marshal encodes the Set for persistence or the wire. T is opaque
@@ -199,7 +199,7 @@ func (s Set[T]) Merge(other Set[T]) Set[T] {
 //	    uvarint(counter)
 //
 // encodeElement must not be nil.
-func (s Set[T]) Marshal(encodeElement func(T) ([]byte, error)) ([]byte, error) {
+func (s ORSet[T]) Marshal(encodeElement func(T) ([]byte, error)) ([]byte, error) {
 	vectorBytes, err := s.vector.Marshal()
 	if err != nil {
 		return nil, err
@@ -223,7 +223,7 @@ func (s Set[T]) Marshal(encodeElement func(T) ([]byte, error)) ([]byte, error) {
 // Unmarshal parses the byte form into the receiver. The caller
 // supplies the element decoder, matching the encoder used at
 // Marshal. decodeElement must not be nil.
-func (s *Set[T]) Unmarshal(data []byte, decodeElement func([]byte) (T, error)) error {
+func (s *ORSet[T]) Unmarshal(data []byte, decodeElement func([]byte) (T, error)) error {
 	vectorLen, n := binary.Uvarint(data)
 	if n <= 0 {
 		return errors.New("orset: invalid vector length")

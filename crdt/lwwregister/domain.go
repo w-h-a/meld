@@ -1,4 +1,4 @@
-package lww
+package lwwregister
 
 // Tag is the totally ordered timestamp attached to the current
 // value of a Register.

@@ -1,10 +1,10 @@
-// Package lww implements the Last-Writer-Wins Register CRDT.
+// Package lwwregister implements the Last-Writer-Wins Register CRDT.
 //
 // References:
 //   - Shapiro et al., "A comprehensive study of Convergent and
 //     Commutative Replicated Data Types" (2011), Section 3.2.1
 //   - Lamport, "Time, Clocks, and the Ordering of Events" (1978)
-package lww
+package lwwregister
 
 import (
 	"encoding/binary"
@@ -16,26 +16,26 @@ import (
 // Make sure Register satisfies crdt.Mergeable. The witness uses a
 // concrete instantiation because Go generics require one for a
 // compile-time interface check.
-var _ crdt.Mergeable[Register[struct{}]] = Register[struct{}]{}
+var _ crdt.Mergeable[LWWRegister[struct{}]] = LWWRegister[struct{}]{}
 
-// Register holds one value of type T together with a Tag that
+// LWWRegister holds one value of type T together with a Tag that
 // totally orders writes.
-type Register[T any] struct {
+type LWWRegister[T any] struct {
 	value T
 	tag   Tag
 }
 
-func New[T any]() Register[T] {
-	return Register[T]{}
+func New[T any]() LWWRegister[T] {
+	return LWWRegister[T]{}
 }
 
 // Value returns the current value.
-func (r Register[T]) Value() T {
+func (r LWWRegister[T]) Value() T {
 	return r.value
 }
 
 // Tag returns the timestamp of the current value.
-func (r Register[T]) Tag() Tag {
+func (r LWWRegister[T]) Tag() Tag {
 	return r.tag
 }
 
@@ -43,8 +43,8 @@ func (r Register[T]) Tag() Tag {
 // one greater than the receiver's and Writer set to nodeID. The
 // receiver is not modified. Callers pass their own node id and
 // only their own.
-func (r Register[T]) Set(nodeID string, value T) Register[T] {
-	return Register[T]{
+func (r LWWRegister[T]) Set(nodeID string, value T) LWWRegister[T] {
+	return LWWRegister[T]{
 		value: value,
 		tag:   Tag{Counter: r.tag.Counter + 1, Writer: nodeID},
 	}
@@ -68,7 +68,7 @@ func (r Register[T]) Set(nodeID string, value T) Register[T] {
 //
 // Compared to the original a, c has the strictly greater Counter,
 // so c wins any further merge with a.
-func (r Register[T]) Merge(other Register[T]) Register[T] {
+func (r LWWRegister[T]) Merge(other LWWRegister[T]) LWWRegister[T] {
 	if r.tag.Less(other.tag) {
 		return other
 	}
@@ -79,7 +79,7 @@ func (r Register[T]) Merge(other Register[T]) Register[T] {
 // Marshal encodes the register for persistence or the wire. T is
 // opaque to the register, so the caller supplies the value codec.
 // encodeValue must not be nil.
-func (r Register[T]) Marshal(encodeValue func(T) ([]byte, error)) ([]byte, error) {
+func (r LWWRegister[T]) Marshal(encodeValue func(T) ([]byte, error)) ([]byte, error) {
 	valueBytes, err := encodeValue(r.value)
 	if err != nil {
 		return nil, err
@@ -101,7 +101,7 @@ func (r Register[T]) Marshal(encodeValue func(T) ([]byte, error)) ([]byte, error
 // Unmarshal parses the byte form into the receiver. The caller
 // supplies the value decoder, matching the encoder used at
 // Marshal. decodeValue must not be nil.
-func (r *Register[T]) Unmarshal(data []byte, decodeValue func([]byte) (T, error)) error {
+func (r *LWWRegister[T]) Unmarshal(data []byte, decodeValue func([]byte) (T, error)) error {
 	valueLen, n := binary.Uvarint(data)
 	if n <= 0 {
 		return errors.New("lww: invalid value length")
