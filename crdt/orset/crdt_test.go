@@ -187,7 +187,7 @@ func TestSet_AddCoalescesRepeatedAddsAtSameReplica(t *testing.T) {
 func TestSet_MergeIsCommutative(t *testing.T) {
 	cases := []struct {
 		name string
-		a, b orset.Set[string]
+		a, b orset.ORSet[string]
 	}{
 		{
 			"both empty",
@@ -231,7 +231,7 @@ func TestSet_MergeIsCommutative(t *testing.T) {
 func TestSet_MergeIsAssociative(t *testing.T) {
 	cases := []struct {
 		name    string
-		a, b, c orset.Set[string]
+		a, b, c orset.ORSet[string]
 	}{
 		{
 			"three disjoint adds",
@@ -268,7 +268,7 @@ func TestSet_MergeIsAssociative(t *testing.T) {
 func TestSet_MergeIsIdempotent(t *testing.T) {
 	cases := []struct {
 		name string
-		a, b orset.Set[string]
+		a, b orset.ORSet[string]
 	}{
 		{
 			"merging an empty set",
@@ -299,7 +299,7 @@ func TestSet_MergeIsIdempotent(t *testing.T) {
 	}
 }
 
-func sortedElements(s orset.Set[string]) []string {
+func sortedElements(s orset.ORSet[string]) []string {
 	out := s.Elements()
 	sort.Strings(out)
 	return out
@@ -319,7 +319,7 @@ func TestSet_MarshalUnmarshalRoundTripLiveElements(t *testing.T) {
 	// act
 	bytes, err := original.Marshal(stringEncode)
 	require.NoError(t, err)
-	var decoded orset.Set[string]
+	var decoded orset.ORSet[string]
 	require.NoError(t, decoded.Unmarshal(bytes, stringDecode))
 
 	// assert
@@ -333,7 +333,7 @@ func TestSet_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
 	// act
 	bytes, err := original.Marshal(stringEncode)
 	require.NoError(t, err)
-	var decoded orset.Set[string]
+	var decoded orset.ORSet[string]
 	require.NoError(t, decoded.Unmarshal(bytes, stringDecode))
 
 	// assert
@@ -352,7 +352,7 @@ func TestSet_MarshalUnmarshalRoundTripPreservesRemovalHistory(t *testing.T) {
 	// act. Round-trip.
 	bytes, err := original.Marshal(stringEncode)
 	require.NoError(t, err)
-	var decoded orset.Set[string]
+	var decoded orset.ORSet[string]
 	require.NoError(t, decoded.Unmarshal(bytes, stringDecode))
 
 	// assert. Live state matches.
@@ -369,7 +369,7 @@ func TestSet_MarshalUnmarshalRoundTripPreservesRemovalHistory(t *testing.T) {
 
 func TestSet_UnmarshalRejectsEmptyInput(t *testing.T) {
 	// arrange
-	var s orset.Set[string]
+	var s orset.ORSet[string]
 
 	// act
 	err := s.Unmarshal(nil, stringDecode)
@@ -381,7 +381,7 @@ func TestSet_UnmarshalRejectsEmptyInput(t *testing.T) {
 func TestSet_UnmarshalRejectsTruncatedVectorBytes(t *testing.T) {
 	// arrange. vectorLen=5 but only 1 byte follows.
 	bytes := []byte{0x05, 0x00}
-	var s orset.Set[string]
+	var s orset.ORSet[string]
 
 	// act
 	err := s.Unmarshal(bytes, stringDecode)
@@ -399,7 +399,7 @@ func TestSet_UnmarshalRejectsTruncatedElement(t *testing.T) {
 		0x01, // liveCount = 1
 		0x0a, // elementLen = 10, no bytes follow
 	}
-	var s orset.Set[string]
+	var s orset.ORSet[string]
 
 	// act
 	err := s.Unmarshal(bytes, stringDecode)
@@ -417,7 +417,7 @@ func TestSet_UnmarshalSurfacesDecoderError(t *testing.T) {
 	rejectingDecoder := func([]byte) (string, error) {
 		return "", errors.New("nope")
 	}
-	var s orset.Set[string]
+	var s orset.ORSet[string]
 
 	// act
 	err = s.Unmarshal(bytes, rejectingDecoder)
