@@ -52,6 +52,11 @@ func (g GCounter) Value() uint64 {
 	return sum
 }
 
+// SlotCount returns the length of slots.
+func (g GCounter) SlotCount() int {
+	return len(g.slots)
+}
+
 // Increment returns a new counter with nodeID's slot raised by 1.
 // The receiver is not modified; so, counters are safe to share across
 // routines and the wire. Callers pass their own node id and only their own.
