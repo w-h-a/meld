@@ -105,6 +105,11 @@ func (s ORSet[T]) Elements() []T {
 	return out
 }
 
+// LiveCount returns the number of live triples the Set stores.
+func (s ORSet[T]) LiveCount() int {
+	return len(s.live)
+}
+
 // Clone returns a deep copy.
 func (s ORSet[T]) Clone() ORSet[T] {
 	return ORSet[T]{
