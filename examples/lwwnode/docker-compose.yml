@@ -1,0 +1,73 @@
+services:
+  jaeger:
+    container_name: jaeger
+    image: jaegertracing/all-in-one:1.62.0
+    ports:
+      - '16686:16686'
+      - '4317:4317'
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider http://localhost:16686/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  n0:
+    build:
+      context: ../..
+      dockerfile: examples/lwwnode/Dockerfile
+    environment:
+      NODE_ID: n0
+      BIND_ADDR: "0.0.0.0:7946"
+      CRDT_BIND_ADDR: "0.0.0.0:7947"
+      PROBE_INTERVAL: "5s"
+      PROBE_TIMEOUT: "1s"
+      SUSPICION_MULT: "8"
+      WRITE_INTERVAL: "20s"
+      GOSSIP_INTERVAL: "1s"
+      OTLP_ENDPOINT: "jaeger:4317"
+    depends_on:
+      jaeger:
+        condition: service_healthy
+
+  n1:
+    build:
+      context: ../..
+      dockerfile: examples/lwwnode/Dockerfile
+    environment:
+      NODE_ID: n1
+      BIND_ADDR: "0.0.0.0:7946"
+      CRDT_BIND_ADDR: "0.0.0.0:7947"
+      PEERS: "n0:7946"
+      PROBE_INTERVAL: "5s"
+      PROBE_TIMEOUT: "1s"
+      SUSPICION_MULT: "8"
+      WRITE_INTERVAL: "20s"
+      GOSSIP_INTERVAL: "1s"
+      OTLP_ENDPOINT: "jaeger:4317"
+    depends_on:
+      n0:
+        condition: service_started
+      jaeger:
+        condition: service_healthy
+
+  n2:
+    build:
+      context: ../..
+      dockerfile: examples/lwwnode/Dockerfile
+    environment:
+      NODE_ID: n2
+      BIND_ADDR: "0.0.0.0:7946"
+      CRDT_BIND_ADDR: "0.0.0.0:7947"
+      PEERS: "n0:7946"
+      PROBE_INTERVAL: "5s"
+      PROBE_TIMEOUT: "1s"
+      SUSPICION_MULT: "8"
+      WRITE_INTERVAL: "20s"
+      GOSSIP_INTERVAL: "1s"
+      OTLP_ENDPOINT: "jaeger:4317"
+    depends_on:
+      n0:
+        condition: service_started
+      jaeger:
+        condition: service_healthy
