@@ -6,11 +6,11 @@ Go library providing gossip transport, membership, and conflict-free replicated 
 
 ## Packages
 
-| Package       | Implementations                                 | Use case                                     |
-| ------------- | ----------------------------------------------- | -------------------------------------------- |
-| `gossip/`     | `udp`, `tcp`                                    | Point-to-point and epidemic gossip transport |
-| `membership/` | `swim`, `phi`                                   | Cluster membership and failure detection     |
-| `crdt/`       | `gcounter`, `pncounter`, `lwwregister`, `orset` | Conflict-free replicated data types          |
+| Package       | Implementations                                                  | Use case                                     |
+| ------------- | ---------------------------------------------------------------- | -------------------------------------------- |
+| `gossip/`     | `udp`, `tcp`                                                     | Point-to-point and epidemic gossip transport |
+| `membership/` | `swim`, `phi`                                                    | Cluster membership and failure detection     |
+| `crdt/`       | `gcounter`, `pncounter`, `lwwregister`, `versionvector`, `orset` | Conflict-free replicated data types          |
 
 ## SWIM Failure Detection
 

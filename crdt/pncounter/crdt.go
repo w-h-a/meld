@@ -36,6 +36,18 @@ func (pn PNCounter) Value() int64 {
 	return int64(pn.p.Value()) - int64(pn.n.Value())
 }
 
+// Increments returns the total of all incremements observed across
+// every node. In other words, it returns the sum of the P G-Counter.
+func (pn PNCounter) Increments() uint64 {
+	return pn.p.Value()
+}
+
+// Decrements returns the total of all decrements observed across
+// every node. In other words, it returns the sum of the N G-Counter.
+func (pn PNCounter) Decrements() uint64 {
+	return pn.n.Value()
+}
+
 // Increment returns a new counter with nodeID's increment slot raised by
 // 1. The receiver is not modified. So counters are safe to share across
 // routines and the wire. Callers pass their own node id and only their own.
