@@ -18,6 +18,7 @@ import (
 
 	"github.com/w-h-a/meld/gossip"
 	"github.com/w-h-a/meld/membership"
+	"github.com/w-h-a/meld/util/tracecontext"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -183,7 +184,7 @@ func (m *swimMembership) handlePacket(pkt *gossip.Packet) {
 		return
 	}
 
-	ctx, span := m.tracer.Start(extractTraceContext(context.Background(), e), "swim.receive", trace.WithAttributes(
+	ctx, span := m.tracer.Start(tracecontext.Extract(context.Background(), e.Carrier), "swim.receive", trace.WithAttributes(
 		attribute.String("swim.node_id", m.localID),
 		attribute.Int("swim.message_type", int(e.Type)),
 		attribute.String("swim.sender", e.From.ID),
@@ -553,7 +554,7 @@ func (m *swimMembership) markSuspect(ctx context.Context, target nodeState) {
 // envelope construction) so the span is bare. SendTo failures
 // are runtime faults and mark the span error.
 func (m *swimMembership) sendEnvelope(ctx context.Context, addr net.Addr, e envelope) {
-	injectTraceContext(ctx, &e)
+	e.Carrier = tracecontext.Inject(ctx)
 
 	data, err := encode(e)
 	if err != nil {
@@ -913,7 +914,7 @@ func (m *swimMembership) snapshotLivePeersLocked() []*nodeState {
 // caller input (bad envelope construction) so the span is bare.
 // Broadcast failures are runtime faults and mark the span error.
 func (m *swimMembership) broadcastEnvelope(ctx context.Context, peers []net.Addr, e envelope) {
-	injectTraceContext(ctx, &e)
+	e.Carrier = tracecontext.Inject(ctx)
 
 	data, err := encode(e)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/w-h-a/meld/crdt"
 	"github.com/w-h-a/meld/crdt/orset"
 )
 
@@ -173,9 +174,9 @@ func TestSet_AddCoalescesRepeatedAddsAtSameReplica(t *testing.T) {
 	}
 
 	// act
-	onceBytes, err := once.Marshal(stringEncode)
+	onceBytes, err := once.Marshal(crdt.StringEncode)
 	require.NoError(t, err)
-	manyBytes, err := manyTimes.Marshal(stringEncode)
+	manyBytes, err := manyTimes.Marshal(crdt.StringEncode)
 	require.NoError(t, err)
 
 	// assert
@@ -307,9 +308,6 @@ func sortedElements(s orset.ORSet[string]) []string {
 
 // --- marshal / unmarshal ---
 
-func stringEncode(s string) ([]byte, error) { return []byte(s), nil }
-func stringDecode(b []byte) (string, error) { return string(b), nil }
-
 func TestSet_MarshalUnmarshalRoundTripLiveElements(t *testing.T) {
 	// arrange
 	original := orset.New[string]().
@@ -317,10 +315,10 @@ func TestSet_MarshalUnmarshalRoundTripLiveElements(t *testing.T) {
 		Add("n2", "caddy")
 
 	// act
-	bytes, err := original.Marshal(stringEncode)
+	bytes, err := original.Marshal(crdt.StringEncode)
 	require.NoError(t, err)
 	var decoded orset.ORSet[string]
-	require.NoError(t, decoded.Unmarshal(bytes, stringDecode))
+	require.NoError(t, decoded.Unmarshal(bytes, crdt.StringDecode))
 
 	// assert
 	require.ElementsMatch(t, original.Elements(), decoded.Elements())
@@ -331,10 +329,10 @@ func TestSet_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
 	original := orset.New[string]()
 
 	// act
-	bytes, err := original.Marshal(stringEncode)
+	bytes, err := original.Marshal(crdt.StringEncode)
 	require.NoError(t, err)
 	var decoded orset.ORSet[string]
-	require.NoError(t, decoded.Unmarshal(bytes, stringDecode))
+	require.NoError(t, decoded.Unmarshal(bytes, crdt.StringDecode))
 
 	// assert
 	require.Empty(t, decoded.Elements())
@@ -350,10 +348,10 @@ func TestSet_MarshalUnmarshalRoundTripPreservesRemovalHistory(t *testing.T) {
 	original = original.Remove("nginx")
 
 	// act. Round-trip.
-	bytes, err := original.Marshal(stringEncode)
+	bytes, err := original.Marshal(crdt.StringEncode)
 	require.NoError(t, err)
 	var decoded orset.ORSet[string]
-	require.NoError(t, decoded.Unmarshal(bytes, stringDecode))
+	require.NoError(t, decoded.Unmarshal(bytes, crdt.StringDecode))
 
 	// assert. Live state matches.
 	require.ElementsMatch(t, original.Elements(), decoded.Elements())
@@ -372,7 +370,7 @@ func TestSet_UnmarshalRejectsEmptyInput(t *testing.T) {
 	var s orset.ORSet[string]
 
 	// act
-	err := s.Unmarshal(nil, stringDecode)
+	err := s.Unmarshal(nil, crdt.StringDecode)
 
 	// assert
 	require.Error(t, err)
@@ -384,7 +382,7 @@ func TestSet_UnmarshalRejectsTruncatedVectorBytes(t *testing.T) {
 	var s orset.ORSet[string]
 
 	// act
-	err := s.Unmarshal(bytes, stringDecode)
+	err := s.Unmarshal(bytes, crdt.StringDecode)
 
 	// assert
 	require.Error(t, err)
@@ -402,7 +400,7 @@ func TestSet_UnmarshalRejectsTruncatedElement(t *testing.T) {
 	var s orset.ORSet[string]
 
 	// act
-	err := s.Unmarshal(bytes, stringDecode)
+	err := s.Unmarshal(bytes, crdt.StringDecode)
 
 	// assert
 	require.Error(t, err)
@@ -411,7 +409,7 @@ func TestSet_UnmarshalRejectsTruncatedElement(t *testing.T) {
 func TestSet_UnmarshalSurfacesDecoderError(t *testing.T) {
 	// arrange. Valid bytes. Decoder rejects the element bytes.
 	original := orset.New[string]().Add("n1", "nginx")
-	bytes, err := original.Marshal(stringEncode)
+	bytes, err := original.Marshal(crdt.StringEncode)
 	require.NoError(t, err)
 
 	rejectingDecoder := func([]byte) (string, error) {
