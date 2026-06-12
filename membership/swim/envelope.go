@@ -1,12 +1,6 @@
 package swim
 
-import (
-	"context"
-	"encoding/json"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
-)
+import "encoding/json"
 
 // msgType discrimates SWIM protocol messages on the wire.
 type msgType uint8
@@ -44,18 +38,4 @@ func decode(b []byte) (envelope, error) {
 	var e envelope
 	err := json.Unmarshal(b, &e)
 	return e, err
-}
-
-func injectTraceContext(ctx context.Context, env *envelope) {
-	if env.Carrier == nil {
-		env.Carrier = map[string]string{}
-	}
-	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(env.Carrier))
-}
-
-func extractTraceContext(ctx context.Context, env envelope) context.Context {
-	if len(env.Carrier) == 0 {
-		return ctx
-	}
-	return otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(env.Carrier))
 }

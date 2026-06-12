@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/w-h-a/meld/crdt"
 	"github.com/w-h-a/meld/crdt/lwwregister"
 )
 
@@ -227,18 +228,15 @@ func TestRegister_MergeIsIdempotent(t *testing.T) {
 
 // --- marshal / unmarshal ---
 
-func stringEncode(s string) ([]byte, error) { return []byte(s), nil }
-func stringDecode(b []byte) (string, error) { return string(b), nil }
-
 func TestRegister_MarshalUnmarshalRoundTrip(t *testing.T) {
 	// arrange
 	original := lwwregister.New[string]().Set("n1", "v1").Set("n2", "v2")
 
 	// act
-	bytes, err := original.Marshal(stringEncode)
+	bytes, err := original.Marshal(crdt.StringEncode)
 	require.NoError(t, err)
 	var decoded lwwregister.LWWRegister[string]
-	require.NoError(t, decoded.Unmarshal(bytes, stringDecode))
+	require.NoError(t, decoded.Unmarshal(bytes, crdt.StringDecode))
 
 	// assert
 	require.Equal(t, original.Value(), decoded.Value())
@@ -250,10 +248,10 @@ func TestRegister_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
 	original := lwwregister.New[string]()
 
 	// act
-	bytes, err := original.Marshal(stringEncode)
+	bytes, err := original.Marshal(crdt.StringEncode)
 	require.NoError(t, err)
 	var decoded lwwregister.LWWRegister[string]
-	require.NoError(t, decoded.Unmarshal(bytes, stringDecode))
+	require.NoError(t, decoded.Unmarshal(bytes, crdt.StringDecode))
 
 	// assert
 	require.Equal(t, "", decoded.Value())
@@ -265,7 +263,7 @@ func TestRegister_UnmarshalRejectsEmptyInput(t *testing.T) {
 	var r lwwregister.LWWRegister[string]
 
 	// act
-	err := r.Unmarshal(nil, stringDecode)
+	err := r.Unmarshal(nil, crdt.StringDecode)
 
 	// assert
 	require.Error(t, err)
@@ -277,7 +275,7 @@ func TestRegister_UnmarshalRejectsTruncatedValueBytes(t *testing.T) {
 	var r lwwregister.LWWRegister[string]
 
 	// act
-	err := r.Unmarshal(bytes, stringDecode)
+	err := r.Unmarshal(bytes, crdt.StringDecode)
 
 	// assert
 	require.Error(t, err)
@@ -286,7 +284,7 @@ func TestRegister_UnmarshalRejectsTruncatedValueBytes(t *testing.T) {
 func TestRegister_UnmarshalSurfacesDecoderError(t *testing.T) {
 	// arrange. Valid header. Decoder rejects the value bytes.
 	original := lwwregister.New[string]().Set("n1", "v1")
-	bytes, err := original.Marshal(stringEncode)
+	bytes, err := original.Marshal(crdt.StringEncode)
 	require.NoError(t, err)
 
 	rejectingDecoder := func([]byte) (string, error) {

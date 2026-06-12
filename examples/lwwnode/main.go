@@ -14,11 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/w-h-a/meld/crdt"
 	"github.com/w-h-a/meld/crdt/lwwregister"
 	"github.com/w-h-a/meld/gossip"
 	"github.com/w-h-a/meld/gossip/udp"
 	"github.com/w-h-a/meld/membership"
 	"github.com/w-h-a/meld/membership/swim"
+	"github.com/w-h-a/meld/util/tracecontext"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -227,7 +229,7 @@ func mergePacket(pkt *gossip.Packet, state *register, nodeID string) {
 		return
 	}
 
-	ctx := extractTraceContext(context.Background(), f)
+	ctx := tracecontext.Extract(context.Background(), f.Carrier)
 
 	_, span := tracer.Start(ctx, "lwwregister.merge", trace.WithAttributes(
 		attribute.String("crdt.node_id", nodeID),
@@ -237,7 +239,7 @@ func mergePacket(pkt *gossip.Packet, state *register, nodeID string) {
 	defer span.End()
 
 	var incoming lwwregister.LWWRegister[string]
-	if err := incoming.Unmarshal(f.State, stringDecode); err != nil {
+	if err := incoming.Unmarshal(f.State, crdt.StringDecode); err != nil {
 		span.AddEvent("lwwregister.unmarshal_error", trace.WithAttributes(
 			attribute.String("error.message", err.Error()),
 		))
@@ -342,7 +344,7 @@ func broadcastLoop(ctx context.Context, transport gossip.Gossip, m membership.Me
 func broadcastState(transport gossip.Gossip, m membership.Membership, state *register, nodeID string) {
 	snap := state.snapshot()
 
-	data, err := snap.Marshal(stringEncode)
+	data, err := snap.Marshal(crdt.StringEncode)
 	if err != nil {
 		_, span := tracer.Start(context.Background(), "lwwregister.broadcast")
 		span.RecordError(err)
@@ -373,7 +375,7 @@ func broadcastState(transport gossip.Gossip, m membership.Membership, state *reg
 	// span as a child, so one write becomes one distributed trace that
 	// fans out to each peer. This mirrors the SWIM envelope.
 	f := frame{State: data}
-	injectTraceContext(ctx, &f)
+	f.Carrier = tracecontext.Inject(ctx)
 
 	payload, err := json.Marshal(f)
 	if err != nil {
@@ -419,13 +421,6 @@ func crdtPeers(m membership.Membership, transport gossip.Transport, selfID strin
 	return addrs
 }
 
-// stringEncode and stringDecode are the value codec for a string
-// register. The register treats T as opaque, so the demo supplies the
-// codec at the marshal boundary. These match the codec the lwwregister
-// tests use.
-func stringEncode(s string) ([]byte, error) { return []byte(s), nil }
-func stringDecode(b []byte) (string, error) { return string(b), nil }
-
 // frame is the on-the-wire form of a gossiped register. State holds the
 // marshaled register. Carrier holds the propagated trace context, so a
 // receiver starts its merge span as a child of the sender's broadcast
@@ -434,20 +429,6 @@ func stringDecode(b []byte) (string, error) { return string(b), nil }
 type frame struct {
 	Carrier map[string]string `json:"carrier,omitempty"`
 	State   []byte            `json:"state"`
-}
-
-func injectTraceContext(ctx context.Context, f *frame) {
-	if f.Carrier == nil {
-		f.Carrier = map[string]string{}
-	}
-	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(f.Carrier))
-}
-
-func extractTraceContext(ctx context.Context, f frame) context.Context {
-	if len(f.Carrier) == 0 {
-		return ctx
-	}
-	return otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(f.Carrier))
 }
 
 func initTracer(ctx context.Context, serviceName, endpoint string) (func(), error) {
