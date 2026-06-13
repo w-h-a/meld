@@ -1,17 +1,19 @@
 package versionvector
 
-func breakTie(a, b []counter) int {
+import "github.com/w-h-a/meld/crdt"
+
+func breakTie(a, b []crdt.Dot) int {
 	n := min(len(b), len(a))
 
 	for i := range n {
 		switch {
-		case a[i].id < b[i].id:
+		case a[i].Node < b[i].Node:
 			return -1
-		case a[i].id > b[i].id:
+		case a[i].Node > b[i].Node:
 			return 1
-		case a[i].value < b[i].value:
+		case a[i].Counter < b[i].Counter:
 			return -1
-		case a[i].value > b[i].value:
+		case a[i].Counter > b[i].Counter:
 			return 1
 		}
 	}
