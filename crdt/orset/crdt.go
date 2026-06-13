@@ -13,7 +13,7 @@ import (
 	"github.com/w-h-a/meld/crdt/versionvector"
 )
 
-// Make sure Set satisfies crdt.Mergeable. The witness uses a
+// Make sure ORSet satisfies crdt.Mergeable. The witness uses a
 // concrete instantiation because Go generics require one for a
 // compile-time interface check.
 var _ crdt.Mergeable[ORSet[struct{}]] = ORSet[struct{}]{}
