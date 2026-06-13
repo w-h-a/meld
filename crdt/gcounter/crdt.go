@@ -17,84 +17,84 @@ import (
 // Make sure GCounter satisfies crdt.Mergeable.
 var _ crdt.Mergeable[GCounter] = GCounter{}
 
-// GCounter is a grow-only counter. It holds one slot per node, keyed
-// by node id. A node only ever raises its own slot, and the counter's
-// value is the sum across all slots.
+// GCounter is a grow-only counter. It holds one dot per node, keyed
+// by node id. A node only ever raises its own dot, and the counter's
+// value is the sum across all dots.
 type GCounter struct {
-	slots []slot
+	dots []crdt.Dot
 }
 
 func New() GCounter {
 	return GCounter{}
 }
 
-// Get returns nodeID's slot, or 0 if nodeID has never incremented.
+// Get returns nodeID's dot, or 0 if nodeID has never incremented.
 func (g GCounter) Get(nodeID string) uint64 {
-	i := sort.Search(len(g.slots), func(i int) bool {
-		return g.slots[i].id >= nodeID
+	i := sort.Search(len(g.dots), func(i int) bool {
+		return g.dots[i].Node >= nodeID
 	})
 
-	if i < len(g.slots) && g.slots[i].id == nodeID {
-		return g.slots[i].value
+	if i < len(g.dots) && g.dots[i].Node == nodeID {
+		return g.dots[i].Counter
 	}
 
 	return 0
 }
 
-// Value returns the counter's reading, the sum of every node's slot.
+// Value returns the counter's reading, the sum of every node's dot.
 func (g GCounter) Value() uint64 {
 	var sum uint64
 
-	for _, s := range g.slots {
-		sum += s.value
+	for _, s := range g.dots {
+		sum += s.Counter
 	}
 
 	return sum
 }
 
-// SlotCount returns the length of slots.
-func (g GCounter) SlotCount() int {
-	return len(g.slots)
+// DotCount returns the length of dots.
+func (g GCounter) DotCount() int {
+	return len(g.dots)
 }
 
-// Increment returns a new counter with nodeID's slot raised by 1.
+// Increment returns a new counter with nodeID's dot raised by 1.
 // The receiver is not modified; so, counters are safe to share across
 // routines and the wire. Callers pass their own node id and only their own.
 func (g GCounter) Increment(nodeID string) GCounter {
-	i := sort.Search(len(g.slots), func(i int) bool {
-		return g.slots[i].id >= nodeID
+	i := sort.Search(len(g.dots), func(i int) bool {
+		return g.dots[i].Node >= nodeID
 	})
 
-	if i < len(g.slots) && g.slots[i].id == nodeID {
-		out := make([]slot, len(g.slots))
-		copy(out, g.slots)
-		out[i].value++
+	if i < len(g.dots) && g.dots[i].Node == nodeID {
+		out := make([]crdt.Dot, len(g.dots))
+		copy(out, g.dots)
+		out[i].Counter++
 
-		return GCounter{slots: out}
+		return GCounter{dots: out}
 	}
 
-	out := make([]slot, len(g.slots)+1)
-	copy(out, g.slots[:i])
-	out[i] = slot{id: nodeID, value: 1}
-	copy(out[i+1:], g.slots[i:])
+	out := make([]crdt.Dot, len(g.dots)+1)
+	copy(out, g.dots[:i])
+	out[i] = crdt.Dot{Node: nodeID, Counter: 1}
+	copy(out[i+1:], g.dots[i:])
 
-	return GCounter{slots: out}
+	return GCounter{dots: out}
 }
 
 // Clone returns a deep copy.
 func (g GCounter) Clone() GCounter {
-	if len(g.slots) == 0 {
+	if len(g.dots) == 0 {
 		return GCounter{}
 	}
 
-	out := make([]slot, len(g.slots))
-	copy(out, g.slots)
+	out := make([]crdt.Dot, len(g.dots))
+	copy(out, g.dots)
 
-	return GCounter{slots: out}
+	return GCounter{dots: out}
 }
 
 // Merge returns the counter that knows the largest count each node has
-// reached. For every slot, it keeps the larger of the two inputs.
+// reached. For every dot, it keeps the larger of the two inputs.
 //
 // Worked example.
 //
@@ -111,43 +111,43 @@ func (g GCounter) Clone() GCounter {
 // many messages together in any grouping. Merge is idempotent; so,
 // a duplicate message has no effect.
 func (g GCounter) Merge(other GCounter) GCounter {
-	out := make([]slot, 0, len(g.slots)+len(other.slots))
+	out := make([]crdt.Dot, 0, len(g.dots)+len(other.dots))
 
 	i, j := 0, 0
-	for i < len(g.slots) && j < len(other.slots) {
+	for i < len(g.dots) && j < len(other.dots) {
 		switch {
-		case g.slots[i].id == other.slots[j].id:
-			value := max(g.slots[i].value, other.slots[j].value)
-			out = append(out, slot{id: g.slots[i].id, value: value})
+		case g.dots[i].Node == other.dots[j].Node:
+			value := max(g.dots[i].Counter, other.dots[j].Counter)
+			out = append(out, crdt.Dot{Node: g.dots[i].Node, Counter: value})
 			i++
 			j++
-		case g.slots[i].id < other.slots[j].id:
-			out = append(out, g.slots[i])
+		case g.dots[i].Node < other.dots[j].Node:
+			out = append(out, g.dots[i])
 			i++
 		default:
-			out = append(out, other.slots[j])
+			out = append(out, other.dots[j])
 			j++
 		}
 	}
 
 	// drain the rest, if any
-	out = append(out, g.slots[i:]...)
-	out = append(out, other.slots[j:]...)
+	out = append(out, g.dots[i:]...)
+	out = append(out, other.dots[j:]...)
 
-	return GCounter{slots: out}
+	return GCounter{dots: out}
 }
 
 // Marshal encodes the counter for persistence or the wire.
-// Format: uvarint(slot count), then per slot uvarint(idLen), idBytes,
+// Format: uvarint(dot count), then per dot uvarint(idLen), idBytes,
 // and uvarint(value).
 func (g GCounter) Marshal() ([]byte, error) {
-	buf := make([]byte, 0, 1+len(g.slots)*12)
-	buf = binary.AppendUvarint(buf, uint64(len(g.slots)))
+	buf := make([]byte, 0, 1+len(g.dots)*12)
+	buf = binary.AppendUvarint(buf, uint64(len(g.dots)))
 
-	for _, s := range g.slots {
-		buf = binary.AppendUvarint(buf, uint64(len(s.id)))
-		buf = append(buf, s.id...)
-		buf = binary.AppendUvarint(buf, s.value)
+	for _, s := range g.dots {
+		buf = binary.AppendUvarint(buf, uint64(len(s.Node)))
+		buf = append(buf, s.Node...)
+		buf = binary.AppendUvarint(buf, s.Counter)
 	}
 
 	return buf, nil
@@ -167,7 +167,7 @@ func (g *GCounter) Unmarshal(data []byte) error {
 		return errors.New("gcounter: count exceeds remaining data")
 	}
 
-	out := make([]slot, 0, count)
+	out := make([]crdt.Dot, 0, count)
 	var prev string
 
 	for k := range count {
@@ -194,19 +194,19 @@ func (g *GCounter) Unmarshal(data []byte) error {
 		data = data[n:]
 
 		if value == 0 {
-			return errors.New("gcounter: zero-valued slot violates invariant")
+			return errors.New("gcounter: zero-valued dot violates invariant")
 		}
 
 		if k > 0 && id <= prev {
-			return errors.New("gcounter: slots not sorted by id")
+			return errors.New("gcounter: dots not sorted by id")
 		}
 
 		prev = id
 
-		out = append(out, slot{id: id, value: value})
+		out = append(out, crdt.Dot{Node: id, Counter: value})
 	}
 
-	g.slots = out
+	g.dots = out
 
 	return nil
 }

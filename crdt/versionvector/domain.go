@@ -18,8 +18,3 @@ const (
 	ConcurrentGreater
 	ConcurrentLesser
 )
-
-type counter struct {
-	id    string
-	value uint64
-}

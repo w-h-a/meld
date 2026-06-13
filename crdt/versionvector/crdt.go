@@ -20,7 +20,7 @@ var _ crdt.Mergeable[VersionVector] = VersionVector{}
 // VersionVector summarizes the events one replica has seen in a
 // distributed system.
 type VersionVector struct {
-	entries []counter
+	dots []crdt.Dot
 }
 
 func New() VersionVector {
@@ -29,12 +29,12 @@ func New() VersionVector {
 
 // Get returns the counter for nodeID, or 0 if nodeID is absent
 func (v VersionVector) Get(nodeID string) uint64 {
-	i := sort.Search(len(v.entries), func(i int) bool {
-		return v.entries[i].id >= nodeID
+	i := sort.Search(len(v.dots), func(i int) bool {
+		return v.dots[i].Node >= nodeID
 	})
 
-	if i < len(v.entries) && v.entries[i].id == nodeID {
-		return v.entries[i].value
+	if i < len(v.dots) && v.dots[i].Node == nodeID {
+		return v.dots[i].Counter
 	}
 
 	return 0
@@ -44,36 +44,36 @@ func (v VersionVector) Get(nodeID string) uint64 {
 // The receiver is not modified; so, vectors are safe to share across
 // routines and the wire. Callers pass their own node id and only their own.
 func (v VersionVector) Increment(nodeID string) VersionVector {
-	i := sort.Search(len(v.entries), func(i int) bool {
-		return v.entries[i].id >= nodeID
+	i := sort.Search(len(v.dots), func(i int) bool {
+		return v.dots[i].Node >= nodeID
 	})
 
-	if i < len(v.entries) && v.entries[i].id == nodeID {
-		out := make([]counter, len(v.entries))
-		copy(out, v.entries)
-		out[i].value++
+	if i < len(v.dots) && v.dots[i].Node == nodeID {
+		out := make([]crdt.Dot, len(v.dots))
+		copy(out, v.dots)
+		out[i].Counter++
 
-		return VersionVector{entries: out}
+		return VersionVector{dots: out}
 	}
 
-	out := make([]counter, len(v.entries)+1)
-	copy(out, v.entries[:i])
-	out[i] = counter{id: nodeID, value: 1}
-	copy(out[i+1:], v.entries[i:])
+	out := make([]crdt.Dot, len(v.dots)+1)
+	copy(out, v.dots[:i])
+	out[i] = crdt.Dot{Node: nodeID, Counter: 1}
+	copy(out[i+1:], v.dots[i:])
 
-	return VersionVector{entries: out}
+	return VersionVector{dots: out}
 }
 
 // Clone returns a deep copy.
 func (v VersionVector) Clone() VersionVector {
-	if len(v.entries) == 0 {
+	if len(v.dots) == 0 {
 		return VersionVector{}
 	}
 
-	out := make([]counter, len(v.entries))
-	copy(out, v.entries)
+	out := make([]crdt.Dot, len(v.dots))
+	copy(out, v.dots)
 
-	return VersionVector{entries: out}
+	return VersionVector{dots: out}
 }
 
 // Compare returns the causal relationship of v to other. The four
@@ -100,7 +100,7 @@ func (v VersionVector) Clone() VersionVector {
 //
 // Lesser. The mirror of Greater.
 //
-// ConcurrentGreater or ConcurrentLesser. Some counters favor v and
+// ConcurrentGreater or ConcurrentLesser. Some dots favor v and
 // some favor other. The replicas diverged. Each one saw events the
 // other did not. The caller must merge or invoke a conflict policy.
 //
@@ -110,7 +110,7 @@ func (v VersionVector) Clone() VersionVector {
 // The split between ConcurrentGreater and ConcurrentLesser is a
 // deterministic tiebreak so consumers that need a single answer
 // pick the same winner always. The vector with the larger sum of
-// counters wins. If the sums are equal, the sorted entries are walked
+// dots wins. If the sums are equal, the sorted dots are walked
 // and at each position the larger id wins, then the larger value, with
 // the longer slice winning if every shared position matched.
 func (v VersionVector) Compare(other VersionVector) Ordering {
@@ -118,37 +118,37 @@ func (v VersionVector) Compare(other VersionVector) Ordering {
 	var vSum, oSum uint64
 
 	i, j := 0, 0
-	for i < len(v.entries) && j < len(other.entries) {
+	for i < len(v.dots) && j < len(other.dots) {
 		switch {
-		case v.entries[i].id == other.entries[j].id:
-			if v.entries[i].value > other.entries[j].value {
+		case v.dots[i].Node == other.dots[j].Node:
+			if v.dots[i].Counter > other.dots[j].Counter {
 				hasGreater = true
-			} else if v.entries[i].value < other.entries[j].value {
+			} else if v.dots[i].Counter < other.dots[j].Counter {
 				hasLesser = true
 			}
-			vSum += v.entries[i].value
-			oSum += other.entries[j].value
+			vSum += v.dots[i].Counter
+			oSum += other.dots[j].Counter
 			i++
 			j++
-		case v.entries[i].id < other.entries[j].id:
+		case v.dots[i].Node < other.dots[j].Node:
 			hasGreater = true
-			vSum += v.entries[i].value
+			vSum += v.dots[i].Counter
 			i++
 		default:
 			hasLesser = true
-			oSum += other.entries[j].value
+			oSum += other.dots[j].Counter
 			j++
 		}
 	}
 
-	for ; i < len(v.entries); i++ {
+	for ; i < len(v.dots); i++ {
 		hasGreater = true
-		vSum += v.entries[i].value
+		vSum += v.dots[i].Counter
 	}
 
-	for ; j < len(other.entries); j++ {
+	for ; j < len(other.dots); j++ {
 		hasLesser = true
-		oSum += other.entries[j].value
+		oSum += other.dots[j].Counter
 	}
 
 	switch {
@@ -164,7 +164,7 @@ func (v VersionVector) Compare(other VersionVector) Ordering {
 		return ConcurrentLesser
 	}
 
-	if breakTie(v.entries, other.entries) > 0 {
+	if breakTie(v.dots, other.dots) > 0 {
 		return ConcurrentGreater
 	}
 
@@ -191,43 +191,43 @@ func (v VersionVector) Compare(other VersionVector) Ordering {
 // many messages together in any grouping. Merge is idempotent; so,
 // a duplicate message has no effect.
 func (v VersionVector) Merge(other VersionVector) VersionVector {
-	out := make([]counter, 0, len(v.entries)+len(other.entries))
+	out := make([]crdt.Dot, 0, len(v.dots)+len(other.dots))
 
 	i, j := 0, 0
-	for i < len(v.entries) && j < len(other.entries) {
+	for i < len(v.dots) && j < len(other.dots) {
 		switch {
-		case v.entries[i].id == other.entries[j].id:
-			value := max(other.entries[j].value, v.entries[i].value)
-			out = append(out, counter{id: v.entries[i].id, value: value})
+		case v.dots[i].Node == other.dots[j].Node:
+			value := max(other.dots[j].Counter, v.dots[i].Counter)
+			out = append(out, crdt.Dot{Node: v.dots[i].Node, Counter: value})
 			i++
 			j++
-		case v.entries[i].id < other.entries[j].id:
-			out = append(out, v.entries[i])
+		case v.dots[i].Node < other.dots[j].Node:
+			out = append(out, v.dots[i])
 			i++
 		default:
-			out = append(out, other.entries[j])
+			out = append(out, other.dots[j])
 			j++
 		}
 	}
 
 	// drain the rest, if any
-	out = append(out, v.entries[i:]...)
-	out = append(out, other.entries[j:]...)
+	out = append(out, v.dots[i:]...)
+	out = append(out, other.dots[j:]...)
 
-	return VersionVector{entries: out}
+	return VersionVector{dots: out}
 }
 
 // Marshal encodes the vector for persistence or the wire.
 // Format: uvarint(entry count), then per-entry uvarint(idLen), idBytes,
 // and uvarint(value).
 func (v VersionVector) Marshal() ([]byte, error) {
-	buf := make([]byte, 0, 1+len(v.entries)*12)
-	buf = binary.AppendUvarint(buf, uint64(len(v.entries)))
+	buf := make([]byte, 0, 1+len(v.dots)*12)
+	buf = binary.AppendUvarint(buf, uint64(len(v.dots)))
 
-	for _, e := range v.entries {
-		buf = binary.AppendUvarint(buf, uint64(len(e.id)))
-		buf = append(buf, e.id...)
-		buf = binary.AppendUvarint(buf, e.value)
+	for _, e := range v.dots {
+		buf = binary.AppendUvarint(buf, uint64(len(e.Node)))
+		buf = append(buf, e.Node...)
+		buf = binary.AppendUvarint(buf, e.Counter)
 	}
 
 	return buf, nil
@@ -247,7 +247,7 @@ func (v *VersionVector) Unmarshal(data []byte) error {
 		return errors.New("versionvector: count exceeds remaining data")
 	}
 
-	out := make([]counter, 0, count)
+	out := make([]crdt.Dot, 0, count)
 	var prev string
 
 	for k := range count {
@@ -278,15 +278,15 @@ func (v *VersionVector) Unmarshal(data []byte) error {
 		}
 
 		if k > 0 && id <= prev {
-			return errors.New("versionvector: entries not sorted by id")
+			return errors.New("versionvector: dots not sorted by id")
 		}
 
 		prev = id
 
-		out = append(out, counter{id: id, value: val})
+		out = append(out, crdt.Dot{Node: id, Counter: val})
 	}
 
-	v.entries = out
+	v.dots = out
 
 	return nil
 }
