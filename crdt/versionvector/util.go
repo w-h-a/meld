@@ -6,15 +6,8 @@ func breakTie(a, b []crdt.Dot) int {
 	n := min(len(b), len(a))
 
 	for i := range n {
-		switch {
-		case a[i].Node < b[i].Node:
-			return -1
-		case a[i].Node > b[i].Node:
-			return 1
-		case a[i].Counter < b[i].Counter:
-			return -1
-		case a[i].Counter > b[i].Counter:
-			return 1
+		if cmp := a[i].Compare(b[i]); cmp != 0 {
+			return cmp
 		}
 	}
 
