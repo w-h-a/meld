@@ -224,10 +224,10 @@ func (v VersionVector) Marshal() ([]byte, error) {
 	buf := make([]byte, 0, 1+len(v.dots)*12)
 	buf = binary.AppendUvarint(buf, uint64(len(v.dots)))
 
-	for _, e := range v.dots {
-		buf = binary.AppendUvarint(buf, uint64(len(e.Node)))
-		buf = append(buf, e.Node...)
-		buf = binary.AppendUvarint(buf, e.Counter)
+	for _, d := range v.dots {
+		buf = binary.AppendUvarint(buf, uint64(len(d.Node)))
+		buf = append(buf, d.Node...)
+		buf = binary.AppendUvarint(buf, d.Counter)
 	}
 
 	return buf, nil
