@@ -17,6 +17,22 @@ type Dot struct {
 	Counter uint64
 }
 
+// Compare orders two dots, returning -1, 0, or 1.
+func (d Dot) Compare(other Dot) int {
+	switch {
+	case d.Node < other.Node:
+		return -1
+	case d.Node > other.Node:
+		return 1
+	case d.Counter < other.Counter:
+		return -1
+	case d.Counter > other.Counter:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // Mergeable is the core CRDT contract. Merge must be:
 //   - Commutative: Merge(a, b) == Merge(b, a)
 //   - Associative: Merge(Merge(a, b), c) == Merge(a, Merge(b, c))
