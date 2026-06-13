@@ -45,8 +45,8 @@ func (g GCounter) Get(nodeID string) uint64 {
 func (g GCounter) Value() uint64 {
 	var sum uint64
 
-	for _, s := range g.dots {
-		sum += s.Counter
+	for _, d := range g.dots {
+		sum += d.Counter
 	}
 
 	return sum
@@ -144,10 +144,10 @@ func (g GCounter) Marshal() ([]byte, error) {
 	buf := make([]byte, 0, 1+len(g.dots)*12)
 	buf = binary.AppendUvarint(buf, uint64(len(g.dots)))
 
-	for _, s := range g.dots {
-		buf = binary.AppendUvarint(buf, uint64(len(s.Node)))
-		buf = append(buf, s.Node...)
-		buf = binary.AppendUvarint(buf, s.Counter)
+	for _, d := range g.dots {
+		buf = binary.AppendUvarint(buf, uint64(len(d.Node)))
+		buf = append(buf, d.Node...)
+		buf = binary.AppendUvarint(buf, d.Counter)
 	}
 
 	return buf, nil
