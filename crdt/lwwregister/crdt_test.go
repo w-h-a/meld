@@ -11,7 +11,7 @@ import (
 
 // --- construction, accessors, immutability ---
 
-func TestRegister_NewIsEmpty(t *testing.T) {
+func TestLWWRegister_NewIsEmpty(t *testing.T) {
 	// arrange + act
 	r := lwwregister.New[string]()
 
@@ -20,7 +20,7 @@ func TestRegister_NewIsEmpty(t *testing.T) {
 	require.Equal(t, lwwregister.Tag{}, r.Tag())
 }
 
-func TestRegister_SetReturnsNewRegisterWithoutMutatingReceiver(t *testing.T) {
+func TestLWWRegister_SetReturnsNewRegisterWithoutMutatingReceiver(t *testing.T) {
 	// arrange
 	a := lwwregister.New[string]()
 
@@ -34,7 +34,7 @@ func TestRegister_SetReturnsNewRegisterWithoutMutatingReceiver(t *testing.T) {
 	require.Equal(t, lwwregister.Tag{Counter: 1, Writer: "n1"}, b.Tag())
 }
 
-func TestRegister_SetAdvancesTagCounterByOneAcrossWriters(t *testing.T) {
+func TestLWWRegister_SetAdvancesTagCounterByOneAcrossWriters(t *testing.T) {
 	// arrange + act. Three Sets across two writers.
 	r := lwwregister.New[string]().
 		Set("n1", "v1"). // Counter 0+1 = 1
@@ -46,7 +46,7 @@ func TestRegister_SetAdvancesTagCounterByOneAcrossWriters(t *testing.T) {
 	require.Equal(t, lwwregister.Tag{Counter: 3, Writer: "n1"}, r.Tag())
 }
 
-func TestRegister_Merge_DuplicateWriterBreaksCommutativity(t *testing.T) {
+func TestLWWRegister_Merge_DuplicateWriterBreaksCommutativity(t *testing.T) {
 	// arrange. Two replicas both call Set with the same writer.
 	a := lwwregister.New[string]().Set("shared", "v1")
 	b := lwwregister.New[string]().Set("shared", "v2")
@@ -63,7 +63,7 @@ func TestRegister_Merge_DuplicateWriterBreaksCommutativity(t *testing.T) {
 
 // --- merge: lwwregister outcome ---
 
-func TestRegister_Merge_CausalChain_LaterWriteWins(t *testing.T) {
+func TestLWWRegister_Merge_CausalChain_LaterWriteWins(t *testing.T) {
 	// arrange. n2 observes n1's write, then writes again.
 	a := lwwregister.New[string]().Set("n1", "v1") // tag=(1, n1)
 	b := a.Set("n2", "v2")                         // tag=(2, n2)
@@ -76,7 +76,7 @@ func TestRegister_Merge_CausalChain_LaterWriteWins(t *testing.T) {
 	require.Equal(t, lwwregister.Tag{Counter: 2, Writer: "n2"}, merged.Tag())
 }
 
-func TestRegister_Merge_ConcurrentWrites_WriterTiebreakDecides(t *testing.T) {
+func TestLWWRegister_Merge_ConcurrentWrites_WriterTiebreakDecides(t *testing.T) {
 	// arrange. Two disjoint writers. No causal relation.
 	a := lwwregister.New[string]().Set("n1", "v1") // tag=(1, n1)
 	b := lwwregister.New[string]().Set("n2", "v2") // tag=(1, n2)
@@ -89,7 +89,7 @@ func TestRegister_Merge_ConcurrentWrites_WriterTiebreakDecides(t *testing.T) {
 	require.Equal(t, lwwregister.Tag{Counter: 1, Writer: "n2"}, merged.Tag())
 }
 
-func TestRegister_TagAdvancesAcrossCausallyOrderedWrites(t *testing.T) {
+func TestLWWRegister_TagAdvancesAcrossCausallyOrderedWrites(t *testing.T) {
 	// arrange. b is a local write that happens-after a. To build
 	// c, we merge b into an unrelated concurrent register and
 	// then do one more local Set on top of the merged state.
@@ -109,7 +109,7 @@ func TestRegister_TagAdvancesAcrossCausallyOrderedWrites(t *testing.T) {
 
 // --- crdt properties: commutative, associative, idempotent ---
 
-func TestRegister_MergeIsCommutative(t *testing.T) {
+func TestLWWRegister_MergeIsCommutative(t *testing.T) {
 	// Order of arguments does not matter
 	cases := []struct {
 		name string
@@ -150,7 +150,7 @@ func TestRegister_MergeIsCommutative(t *testing.T) {
 	}
 }
 
-func TestRegister_MergeIsAssociative(t *testing.T) {
+func TestLWWRegister_MergeIsAssociative(t *testing.T) {
 	// Grouping does not matter.
 	cases := []struct {
 		name    string
@@ -189,7 +189,7 @@ func TestRegister_MergeIsAssociative(t *testing.T) {
 	}
 }
 
-func TestRegister_MergeIsIdempotent(t *testing.T) {
+func TestLWWRegister_MergeIsIdempotent(t *testing.T) {
 	// Merging the same value twice has the same effect as merging it
 	// once.
 	cases := []struct {
@@ -228,7 +228,7 @@ func TestRegister_MergeIsIdempotent(t *testing.T) {
 
 // --- marshal / unmarshal ---
 
-func TestRegister_MarshalUnmarshalRoundTrip(t *testing.T) {
+func TestLWWRegister_MarshalUnmarshalRoundTrip(t *testing.T) {
 	// arrange
 	original := lwwregister.New[string]().Set("n1", "v1").Set("n2", "v2")
 
@@ -243,7 +243,7 @@ func TestRegister_MarshalUnmarshalRoundTrip(t *testing.T) {
 	require.Equal(t, original.Tag(), decoded.Tag())
 }
 
-func TestRegister_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
+func TestLWWRegister_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
 	// arrange
 	original := lwwregister.New[string]()
 
@@ -258,7 +258,7 @@ func TestRegister_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
 	require.Equal(t, lwwregister.Tag{}, decoded.Tag())
 }
 
-func TestRegister_UnmarshalRejectsEmptyInput(t *testing.T) {
+func TestLWWRegister_UnmarshalRejectsEmptyInput(t *testing.T) {
 	// arrange
 	var r lwwregister.LWWRegister[string]
 
@@ -269,7 +269,7 @@ func TestRegister_UnmarshalRejectsEmptyInput(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRegister_UnmarshalRejectsTruncatedValueBytes(t *testing.T) {
+func TestLWWRegister_UnmarshalRejectsTruncatedValueBytes(t *testing.T) {
 	// arrange. valueLen header claims 10 bytes, none follow.
 	bytes := []byte{0x0a}
 	var r lwwregister.LWWRegister[string]
@@ -281,7 +281,7 @@ func TestRegister_UnmarshalRejectsTruncatedValueBytes(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRegister_UnmarshalSurfacesDecoderError(t *testing.T) {
+func TestLWWRegister_UnmarshalSurfacesDecoderError(t *testing.T) {
 	// arrange. Valid header. Decoder rejects the value bytes.
 	original := lwwregister.New[string]().Set("n1", "v1")
 	bytes, err := original.Marshal(crdt.StringEncode)
@@ -299,7 +299,7 @@ func TestRegister_UnmarshalSurfacesDecoderError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRegister_MarshalSurfacesEncoderError(t *testing.T) {
+func TestLWWRegister_MarshalSurfacesEncoderError(t *testing.T) {
 	// arrange
 	r := lwwregister.New[string]().Set("n1", "v1")
 	rejectingEncoder := func(string) ([]byte, error) {

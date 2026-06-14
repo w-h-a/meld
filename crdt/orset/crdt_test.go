@@ -1,6 +1,7 @@
 package orset_test
 
 import (
+	"encoding/binary"
 	"errors"
 	"sort"
 	"testing"
@@ -8,11 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/w-h-a/meld/crdt"
 	"github.com/w-h-a/meld/crdt/orset"
+	"github.com/w-h-a/meld/crdt/versionvector"
 )
 
 // --- construction, accessors, immutability ---
 
-func TestSet_NewIsEmpty(t *testing.T) {
+func TestORSet_NewIsEmpty(t *testing.T) {
 	// arrange + act
 	s := orset.New[string]()
 
@@ -21,7 +23,7 @@ func TestSet_NewIsEmpty(t *testing.T) {
 	require.Empty(t, s.Elements())
 }
 
-func TestSet_AddReturnsNewSetWithoutMutatingReceiver(t *testing.T) {
+func TestORSet_AddReturnsNewSetWithoutMutatingReceiver(t *testing.T) {
 	// arrange
 	a := orset.New[string]()
 
@@ -34,7 +36,7 @@ func TestSet_AddReturnsNewSetWithoutMutatingReceiver(t *testing.T) {
 	require.ElementsMatch(t, []string{"nginx"}, b.Elements())
 }
 
-func TestSet_RemoveReturnsNewSetWithoutMutatingReceiver(t *testing.T) {
+func TestORSet_RemoveReturnsNewSetWithoutMutatingReceiver(t *testing.T) {
 	// arrange
 	a := orset.New[string]().Add("n1", "nginx")
 
@@ -46,7 +48,7 @@ func TestSet_RemoveReturnsNewSetWithoutMutatingReceiver(t *testing.T) {
 	require.False(t, b.Contains("nginx"))
 }
 
-func TestSet_RemoveOfUnobservedElementIsNoOp(t *testing.T) {
+func TestORSet_RemoveOfUnobservedElementIsNoOp(t *testing.T) {
 	// arrange
 	s := orset.New[string]()
 
@@ -58,7 +60,7 @@ func TestSet_RemoveOfUnobservedElementIsNoOp(t *testing.T) {
 	require.Empty(t, s2.Elements())
 }
 
-func TestSet_CloneIsIndependent(t *testing.T) {
+func TestORSet_CloneIsIndependent(t *testing.T) {
 	// arrange
 	a := orset.New[string]().Add("n1", "nginx")
 
@@ -73,18 +75,18 @@ func TestSet_CloneIsIndependent(t *testing.T) {
 
 // --- add-wins policy ---
 
-func TestSet_ConcurrentAddRemoveYieldsAddWins(t *testing.T) {
+func TestORSet_ConcurrentAddRemoveYieldsAddWins(t *testing.T) {
 	// arrange. n1 adds "nginx" and n2 mirrors the state.
 	n1 := orset.New[string]().Add("n1", "nginx")
 	n2 := n1.Clone()
 
 	// n2 removes "nginx", which drops (nginx, n1, 1) from live but
-	// retains V[n1]=1.
+	// keeps the dot (n1, 1) in seen.
 	n2 = n2.Remove("nginx")
 	require.False(t, n2.Contains("nginx"))
 
 	// Concurrently, n1 re-adds "nginx", minting (nginx, n1, 2). n2
-	// has never observed this counter.
+	// has never seen the dot (n1, 2).
 	n1 = n1.Add("n1", "nginx")
 	require.True(t, n1.Contains("nginx"))
 
@@ -97,7 +99,7 @@ func TestSet_ConcurrentAddRemoveYieldsAddWins(t *testing.T) {
 	require.True(t, ba.Contains("nginx"))
 }
 
-func TestSet_RemoveOnlyDeletesObservedTags(t *testing.T) {
+func TestORSet_RemoveOnlyDeletesObservedTags(t *testing.T) {
 	// arrange. Two adds at different nodes for the same element.
 	// Neither replica has observed the other.
 	a := orset.New[string]().Add("n1", "x") // triple (x, n1, 1)
@@ -108,14 +110,14 @@ func TestSet_RemoveOnlyDeletesObservedTags(t *testing.T) {
 	require.False(t, aRemoved.Contains("x"))
 	merged := aRemoved.Merge(b)
 
-	// assert. aRemoved's V[n2]=0, so the merge keeps b's
-	// (x, n2, 1) because counter 1 > 0. "x" remains present.
+	// assert. aRemoved has never seen the dot (n2, 1), so the merge
+	// keeps b's (x, n2, 1). "x" remains present.
 	require.True(t, merged.Contains("x"))
 }
 
 // --- convergence under partition ---
 
-func TestSet_PartitionAndHealConverges(t *testing.T) {
+func TestORSet_PartitionAndHealConverges(t *testing.T) {
 	// arrange. Two replicas diverge during a partition.
 	a := orset.New[string]().
 		Add("n1", "nginx").
@@ -137,7 +139,7 @@ func TestSet_PartitionAndHealConverges(t *testing.T) {
 
 // --- flock workload scenario ---
 
-func TestSet_FlockWorkloadAddCancelRecycle(t *testing.T) {
+func TestORSet_FlockWorkloadAddCancelRecycle(t *testing.T) {
 	// arrange. flock-style: add workload, cancel, re-add same id.
 	n1 := orset.New[string]()
 	n2 := orset.New[string]()
@@ -164,7 +166,7 @@ func TestSet_FlockWorkloadAddCancelRecycle(t *testing.T) {
 
 // --- coalescing of repeated adds (Bieniusa Figure 3, set O) ---
 
-func TestSet_AddCoalescesRepeatedAddsAtSameReplica(t *testing.T) {
+func TestORSet_AddCoalescesRepeatedAddsAtSameReplica(t *testing.T) {
 	// arrange. Adding the same element at the same replica many
 	// times should leave one triple in live, not many.
 	once := orset.New[string]().Add("n1", "x")
@@ -185,7 +187,7 @@ func TestSet_AddCoalescesRepeatedAddsAtSameReplica(t *testing.T) {
 
 // --- crdt properties: commutative, associative, idempotent ---
 
-func TestSet_MergeIsCommutative(t *testing.T) {
+func TestORSet_MergeIsCommutative(t *testing.T) {
 	cases := []struct {
 		name string
 		a, b orset.ORSet[string]
@@ -229,7 +231,7 @@ func TestSet_MergeIsCommutative(t *testing.T) {
 	}
 }
 
-func TestSet_MergeIsAssociative(t *testing.T) {
+func TestORSet_MergeIsAssociative(t *testing.T) {
 	cases := []struct {
 		name    string
 		a, b, c orset.ORSet[string]
@@ -266,7 +268,7 @@ func TestSet_MergeIsAssociative(t *testing.T) {
 	}
 }
 
-func TestSet_MergeIsIdempotent(t *testing.T) {
+func TestORSet_MergeIsIdempotent(t *testing.T) {
 	cases := []struct {
 		name string
 		a, b orset.ORSet[string]
@@ -308,7 +310,7 @@ func sortedElements(s orset.ORSet[string]) []string {
 
 // --- marshal / unmarshal ---
 
-func TestSet_MarshalUnmarshalRoundTripLiveElements(t *testing.T) {
+func TestORSet_MarshalUnmarshalRoundTripLiveElements(t *testing.T) {
 	// arrange
 	original := orset.New[string]().
 		Add("n1", "nginx").
@@ -324,7 +326,7 @@ func TestSet_MarshalUnmarshalRoundTripLiveElements(t *testing.T) {
 	require.ElementsMatch(t, original.Elements(), decoded.Elements())
 }
 
-func TestSet_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
+func TestORSet_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
 	// arrange
 	original := orset.New[string]()
 
@@ -338,9 +340,9 @@ func TestSet_MarshalUnmarshalRoundTripEmpty(t *testing.T) {
 	require.Empty(t, decoded.Elements())
 }
 
-func TestSet_MarshalUnmarshalRoundTripPreservesRemovalHistory(t *testing.T) {
-	// arrange. State has live elements and one removed element.
-	// The version vector records V[n1]=2 and V[n2]=1.
+func TestORSet_MarshalUnmarshalRoundTripPreservesRemovalHistory(t *testing.T) {
+	// arrange. State has live elements and one removed element. The
+	// context has seen n1's dots 1 and 2, and n2's dot 1.
 	original := orset.New[string]().
 		Add("n1", "nginx").
 		Add("n2", "envoy").
@@ -357,15 +359,14 @@ func TestSet_MarshalUnmarshalRoundTripPreservesRemovalHistory(t *testing.T) {
 	require.ElementsMatch(t, original.Elements(), decoded.Elements())
 
 	// The removal of "nginx" survives merge with a stale replica
-	// that re-adds nginx at the same triple. decoded's V[n1]=2
-	// means it has already observed counter 1 at n1, so the merge
-	// drops stale's (nginx, n1, 1).
+	// that re-adds nginx at the same triple. decoded has seen the
+	// dot (n1, 1), so the merge drops stale's (nginx, n1, 1).
 	stale := orset.New[string]().Add("n1", "nginx")
 	merged := decoded.Merge(stale)
 	require.False(t, merged.Contains("nginx"))
 }
 
-func TestSet_UnmarshalRejectsEmptyInput(t *testing.T) {
+func TestORSet_UnmarshalRejectsEmptyInput(t *testing.T) {
 	// arrange
 	var s orset.ORSet[string]
 
@@ -376,8 +377,8 @@ func TestSet_UnmarshalRejectsEmptyInput(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSet_UnmarshalRejectsTruncatedVectorBytes(t *testing.T) {
-	// arrange. vectorLen=5 but only 1 byte follows.
+func TestORSet_UnmarshalRejectsTruncatedContextBytes(t *testing.T) {
+	// arrange. contextLen=5 but only 1 byte follows.
 	bytes := []byte{0x05, 0x00}
 	var s orset.ORSet[string]
 
@@ -388,12 +389,15 @@ func TestSet_UnmarshalRejectsTruncatedVectorBytes(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSet_UnmarshalRejectsTruncatedElement(t *testing.T) {
-	// arrange. vectorLen=1, empty vector, liveCount=1, elementLen=10,
-	// no element bytes follow.
+func TestORSet_UnmarshalRejectsTruncatedElement(t *testing.T) {
+	// arrange. A valid empty causal context, then liveCount=1, then a triple
+	// whose elementLen claims 10 bytes but none follow. The bytes must reach
+	// the element decode and fail there, not earlier at the context parse.
 	bytes := []byte{
-		0x01, // vectorLen = 1
-		0x00, // empty vector (entry count = 0)
+		0x03, // contextLen = 3
+		0x01, // normalsLen = 1
+		0x00, // empty version vector (entry count = 0)
+		0x00, // exception count = 0
 		0x01, // liveCount = 1
 		0x0a, // elementLen = 10, no bytes follow
 	}
@@ -402,11 +406,11 @@ func TestSet_UnmarshalRejectsTruncatedElement(t *testing.T) {
 	// act
 	err := s.Unmarshal(bytes, crdt.StringDecode)
 
-	// assert
-	require.Error(t, err)
+	// assert. The failure is element truncation, not a context parse error.
+	require.ErrorContains(t, err, "element bytes truncated")
 }
 
-func TestSet_UnmarshalSurfacesDecoderError(t *testing.T) {
+func TestORSet_UnmarshalSurfacesDecoderError(t *testing.T) {
 	// arrange. Valid bytes. Decoder rejects the element bytes.
 	original := orset.New[string]().Add("n1", "nginx")
 	bytes, err := original.Marshal(crdt.StringEncode)
@@ -424,7 +428,7 @@ func TestSet_UnmarshalSurfacesDecoderError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSet_MarshalSurfacesEncoderError(t *testing.T) {
+func TestORSet_MarshalSurfacesEncoderError(t *testing.T) {
 	// arrange
 	s := orset.New[string]().Add("n1", "nginx")
 	rejectingEncoder := func(string) ([]byte, error) {
@@ -436,4 +440,60 @@ func TestSet_MarshalSurfacesEncoderError(t *testing.T) {
 
 	// assert
 	require.Error(t, err)
+}
+
+func TestORSet_MarshalContextOverheadIsConstant(t *testing.T) {
+	// The causal context adds a fixed handful of bytes over a bare version
+	// vector, a length prefix and a zero exception count, regardless of how many
+	// nodes the set has touched. So the context section of the marshal is the
+	// version vector plus a small constant, not growth proportional to state.
+	// arrange. An ORSet touched by three nodes, and the version vector that
+	// matches its observed dots.
+	s := orset.New[string]().
+		Add("n1", "x").Add("n1", "y").
+		Add("n2", "z").
+		Add("n3", "w")
+	vv := versionvector.New().
+		Increment("n1").Increment("n1").
+		Increment("n2").
+		Increment("n3")
+
+	// act
+	sBytes, err := s.Marshal(crdt.StringEncode)
+	require.NoError(t, err)
+	vvBytes, err := vv.Marshal()
+	require.NoError(t, err)
+
+	// The leading uvarint of the ORSet marshal is the length of its context
+	// section.
+	seenLen, n := binary.Uvarint(sBytes)
+	require.Positive(t, n)
+
+	// assert. The context section is the version vector plus a small constant.
+	require.GreaterOrEqual(t, seenLen, uint64(len(vvBytes)))
+	require.LessOrEqual(t, seenLen-uint64(len(vvBytes)), uint64(3))
+}
+
+func TestORSet_MergeThenMarshalUnmarshalPreservesState(t *testing.T) {
+	// A merged multi-replica state round-trips: marshalling and unmarshalling
+	// preserves both the live elements and the merged causal context.
+	// arrange. Two replicas, each with its own dots, one with a removal.
+	a := orset.New[string]().Add("n1", "nginx").Add("n1", "ssh")
+	b := orset.New[string]().Add("n2", "caddy").Add("n2", "envoy")
+	b = b.Remove("envoy")
+	merged := a.Merge(b)
+
+	// act
+	bytes, err := merged.Marshal(crdt.StringEncode)
+	require.NoError(t, err)
+	var decoded orset.ORSet[string]
+	require.NoError(t, decoded.Unmarshal(bytes, crdt.StringDecode))
+
+	// assert. The live elements survive the round-trip.
+	require.ElementsMatch(t, merged.Elements(), decoded.Elements())
+
+	// And the merged context survived: a stale replica re-adding envoy at its
+	// old dot stays removed, because decoded still knows it observed that dot.
+	stale := orset.New[string]().Add("n2", "caddy").Add("n2", "envoy")
+	require.False(t, decoded.Merge(stale).Contains("envoy"))
 }

@@ -18,16 +18,16 @@ func copyTriples[T comparable](src map[triple[T]]struct{}, extra int) map[triple
 func coalesce[T comparable](src map[triple[T]]struct{}) map[triple[T]]struct{} {
 	highest := make(map[addKey[T]]uint64, len(src))
 	for t := range src {
-		k := addKey[T]{element: t.element, nodeID: t.nodeID}
-		if c, ok := highest[k]; !ok || t.counter > c {
-			highest[k] = t.counter
+		k := addKey[T]{element: t.element, node: t.dot.Node}
+		if c, ok := highest[k]; !ok || t.dot.Counter > c {
+			highest[k] = t.dot.Counter
 		}
 	}
 
 	out := make(map[triple[T]]struct{}, len(highest))
 	for t := range src {
-		k := addKey[T]{element: t.element, nodeID: t.nodeID}
-		if t.counter == highest[k] {
+		k := addKey[T]{element: t.element, node: t.dot.Node}
+		if t.dot.Counter == highest[k] {
 			out[t] = struct{}{}
 		}
 	}
@@ -43,13 +43,13 @@ func encodeTriple[T comparable](t triple[T], encodeElement func(T) ([]byte, erro
 
 	buf := make([]byte, 0,
 		binary.MaxVarintLen64+len(elementBytes)+
-			binary.MaxVarintLen64+len(t.nodeID)+
+			binary.MaxVarintLen64+len(t.dot.Node)+
 			binary.MaxVarintLen64)
 	buf = binary.AppendUvarint(buf, uint64(len(elementBytes)))
 	buf = append(buf, elementBytes...)
-	buf = binary.AppendUvarint(buf, uint64(len(t.nodeID)))
-	buf = append(buf, t.nodeID...)
-	buf = binary.AppendUvarint(buf, t.counter)
+	buf = binary.AppendUvarint(buf, uint64(len(t.dot.Node)))
+	buf = append(buf, t.dot.Node...)
+	buf = binary.AppendUvarint(buf, t.dot.Counter)
 
 	return buf, nil
 }
@@ -98,8 +98,8 @@ func decodeTriple[T comparable](data []byte, decodeElement func([]byte) (T, erro
 	data = data[n:]
 
 	t.element = element
-	t.nodeID = nodeID
-	t.counter = counter
+	t.dot.Node = nodeID
+	t.dot.Counter = counter
 
 	return t, data, nil
 }
