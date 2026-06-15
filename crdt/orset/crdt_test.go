@@ -308,6 +308,80 @@ func sortedElements(s orset.ORSet[string]) []string {
 	return out
 }
 
+// --- delta ---
+
+func TestORSet_AddDeltaMergesToSameAsAdd(t *testing.T) {
+	// arrange
+	s := orset.New[string]().Add("n1", "nginx").Add("n2", "caddy")
+
+	// act
+	viaDelta := s.Merge(s.AddDelta("n1", "nginx"))
+	viaAdd := s.Add("n1", "nginx")
+
+	// assert
+	require.ElementsMatch(t, viaAdd.Elements(), viaDelta.Elements())
+}
+
+func TestORSet_RemoveDeltaMergesToSameAsRemove(t *testing.T) {
+	// arrange
+	s := orset.New[string]().Add("n1", "nginx").Add("n2", "caddy").Add("n1", "ssh")
+
+	// act
+	viaDelta := s.Merge(s.RemoveDelta("nginx"))
+	viaAdd := s.Remove("nginx")
+
+	// assert
+	require.ElementsMatch(t, viaAdd.Elements(), viaDelta.Elements())
+}
+
+func TestORSet_AddDeltaWithGapConverges(t *testing.T) {
+	// arrange
+	rcv := orset.New[string]().Add("n1", "a")
+
+	src := orset.New[string]().Add("n1", "a")
+	newSrc := src.Add("n1", "b")
+	deltaB := src.AddDelta("n1", "b")
+	deltaC := newSrc.AddDelta("n1", "c")
+
+	// act
+	rcv = rcv.Merge(deltaC)
+	require.True(t, rcv.Contains("c"))
+	rcv = rcv.Merge(deltaB)
+
+	// assert
+	full := orset.New[string]().Add("n1", "a").Add("n1", "b").Add("n1", "c")
+	require.ElementsMatch(t, full.Elements(), rcv.Elements())
+}
+
+func TestORSet_ConcurrentAddDeltaRemoveDeltaYieldsAddWins(t *testing.T) {
+	// arrange
+	base := orset.New[string]().Add("n1", "nginx")
+	n1 := base.Clone()
+	n2 := base.Clone()
+
+	addDelta := n1.AddDelta("n1", "nginx")
+	rmDelta := n2.RemoveDelta("nginx")
+
+	// act
+	ab := base.Merge(addDelta).Merge(rmDelta)
+	ba := base.Merge(rmDelta).Merge(addDelta)
+
+	// assert
+	require.True(t, ab.Contains("nginx"))
+	require.True(t, ba.Contains("nginx"))
+}
+
+func TestORSet_RemoveDeltaOfAbsentElementIsNoOP(t *testing.T) {
+	// arrange
+	s := orset.New[string]().Add("n1", "nginx")
+
+	// act
+	merged := s.Merge(s.RemoveDelta("ghost"))
+
+	// assert
+	require.ElementsMatch(t, s.Elements(), merged.Elements())
+}
+
 // --- marshal / unmarshal ---
 
 func TestORSet_MarshalUnmarshalRoundTripLiveElements(t *testing.T) {
@@ -496,4 +570,25 @@ func TestORSet_MergeThenMarshalUnmarshalPreservesState(t *testing.T) {
 	// old dot stays removed, because decoded still knows it observed that dot.
 	stale := orset.New[string]().Add("n2", "caddy").Add("n2", "envoy")
 	require.False(t, decoded.Merge(stale).Contains("envoy"))
+}
+
+func TestORSet_DeltaMarshalsSmallerThanFullState(t *testing.T) {
+	// arrange
+	s := orset.New[string]().
+		Add("n1", "nginx").
+		Add("n2", "caddy").
+		Add("n1", "ssh").
+		Add("n3", "envoy")
+
+	// act
+	full, err := s.Marshal(crdt.StringEncode)
+	require.NoError(t, err)
+	addDelta, err := s.AddDelta("n1", "redis").Marshal(crdt.StringEncode)
+	require.NoError(t, err)
+	removeDelta, err := s.RemoveDelta("nginx").Marshal(crdt.StringEncode)
+	require.NoError(t, err)
+
+	// assert
+	require.Less(t, len(addDelta), len(full))
+	require.Less(t, len(removeDelta), len(full))
 }

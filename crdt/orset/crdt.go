@@ -54,6 +54,24 @@ func (s ORSet[T]) Add(nodeID string, element T) ORSet[T] {
 	return ORSet[T]{live: newLive, seen: newSeen}
 }
 
+// AddDelta returns the delta for adding element at nodeID: So,
+// we need it's both in s.live and observed. The receiver is
+// not modfied, and callers pass their own node id and only their own.
+//
+//	s.Merge(s.AddDelta(n, e)) == s.Add(n, e)
+func (s ORSet[T]) AddDelta(nodeID string, element T) ORSet[T] {
+	counter := s.seen.Next(nodeID)
+	dot := crdt.Dot{Node: nodeID, Counter: counter}
+
+	live := map[triple[T]]struct{}{
+		{element: element, dot: dot}: {},
+	}
+
+	seen := causalcontext.New().Observe(nodeID, counter)
+
+	return ORSet[T]{live: live, seen: seen}
+}
+
 // Remove returns a new Set with every (element, *, *) triple
 // dropped from live. The causal context is not modified: the
 // receiver has already observed every counter it has recorded, and
@@ -70,6 +88,24 @@ func (s ORSet[T]) Remove(element T) ORSet[T] {
 	}
 
 	return ORSet[T]{live: newLive, seen: s.seen}
+}
+
+// RemoveDelta returns the delta for removing element: So, we need
+// to ensure it's not in s.live but seen. The receiver is not
+// modified.
+//
+//	s.Merge(s.RemoveDelta(e)) == s.Remove(e)
+func (s ORSet[T]) RemoveDelta(element T) ORSet[T] {
+	seen := causalcontext.New()
+
+	for t := range s.live {
+		if t.element != element {
+			continue
+		}
+		seen = seen.Observe(t.dot.Node, t.dot.Counter)
+	}
+
+	return ORSet[T]{seen: seen}
 }
 
 // Contains reports whether element appears in any live triple.
@@ -119,11 +155,12 @@ func (s ORSet[T]) Clone() ORSet[T] {
 // The causal context answers that question without a tombstone G-Set.
 // Each side's context records every dot it has observed. So given a
 // record (element, n, c) that one side has and the other does not,
-// ask whether the other side has seen the dot (n, c),
+// ask whether the other side has seen the dot (n, c):
 //
-//	other has not seen (n, c). Keep.
+//	not in other.live and other has NOT seen (n, c). Keep.
 //
-//	other has seen (n, c) but must have removed it. Drop it.
+//	not in other.live and other has seen (n, c), so other must
+//		have removed it. Drop it.
 //
 // Worked example.
 //
