@@ -96,6 +96,49 @@ func TestCausalContext_ObserveAlreadySeenIsNoOp(t *testing.T) {
 	require.Equal(t, before, after)
 }
 
+// --- equal ---
+
+func TestCausalContext_EqualIsTrueIffSameDots(t *testing.T) {
+	cases := []struct {
+		name     string
+		a, b     causalcontext.CausalContext
+		expected bool
+	}{
+		{
+			"same dots, contiguous either way",
+			causalcontext.New().Observe("n1", 1).Observe("n1", 2).Observe("n1", 3),
+			causalcontext.New().Observe("n1", 3).Observe("n1", 1).Observe("n1", 2),
+			true,
+		},
+		{
+			"same exception set, different observe order",
+			causalcontext.New().Observe("n1", 3).Observe("n1", 5),
+			causalcontext.New().Observe("n1", 5).Observe("n1", 3),
+			true,
+		},
+		{
+			"different dot sets",
+			causalcontext.New().Observe("n1", 1),
+			causalcontext.New().Observe("n2", 1),
+			false,
+		},
+		{
+			"one has an extra exception",
+			causalcontext.New().Observe("n1", 1).Observe("n1", 3),
+			causalcontext.New().Observe("n1", 1).Observe("n1", 3).Observe("n1", 5),
+			false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.True(t, c.a.Equal(c.a))
+			require.Equal(t, c.expected, c.a.Equal(c.b))
+			require.Equal(t, c.expected, c.b.Equal(c.a))
+		})
+	}
+}
+
 // --- merge ---
 
 func TestCausalContext_MergeObservesUnionAndCollapses(t *testing.T) {

@@ -54,6 +54,48 @@ func TestPNCounter_CloneIsIndependent(t *testing.T) {
 	require.Equal(t, int64(1), b.Value())
 }
 
+func TestPNCounter_EqualComparesBothSides(t *testing.T) {
+	cases := []struct {
+		name     string
+		a, b     pncounter.PNCounter
+		expected bool
+	}{
+		{
+			"identical increments and decrements",
+			pncounter.New().Increment("n1").Decrement("n2"),
+			pncounter.New().Increment("n1").Decrement("n2"),
+			true,
+		},
+		{
+			"P side differs",
+			pncounter.New().Increment("n1").Increment("n1"),
+			pncounter.New().Increment("n1"),
+			false,
+		},
+		{
+			"N side differs",
+			pncounter.New().Decrement("n1"),
+			pncounter.New().Decrement("n1").Decrement("n1"),
+			false,
+		},
+		{
+			"same value, different P and N",
+			pncounter.New().Increment("n1").Increment("n1"),
+			pncounter.New().Increment("n1").Increment("n1").Increment("n1").Decrement("n1"),
+			false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// act + assert
+			require.True(t, c.a.Equal(c.a))
+			require.Equal(t, c.expected, c.a.Equal(c.b))
+			require.Equal(t, c.expected, c.b.Equal(c.a))
+		})
+	}
+}
+
 // --- value: increments minus decrements ---
 
 func TestPNCounter_ValueIsIncrementsMinusDecrements(t *testing.T) {

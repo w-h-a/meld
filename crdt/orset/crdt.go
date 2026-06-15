@@ -147,10 +147,26 @@ func (s ORSet[T]) Clone() ORSet[T] {
 	}
 }
 
-// Merge combines two replicas' Sets into one. The question
-// Merge has to answer is: when one side has a record and the
-// other side does not, did the other side never see the record,
-// or did it see the record and remove it?
+// Equal reports whether s and other hold the same live triples and have
+// observed the same dots.
+func (s ORSet[T]) Equal(other ORSet[T]) bool {
+	if len(s.live) != len(other.live) {
+		return false
+	}
+
+	for t := range s.live {
+		if _, ok := other.live[t]; !ok {
+			return false
+		}
+	}
+
+	return s.seen.Equal(other.seen)
+}
+
+// Merge combines two replicas' Sets into one. The question Merge has
+// to answer is: when one side has a record and the other side does
+// not, did the other side never see the record, or did it see the
+// record and remove it?
 //
 // The causal context answers that question without a tombstone G-Set.
 // Each side's context records every dot it has observed. So given a

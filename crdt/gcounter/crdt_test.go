@@ -7,7 +7,7 @@ import (
 	"github.com/w-h-a/meld/crdt/gcounter"
 )
 
-// --- get, increment, value, clone ---
+// --- get, increment, value, clone, equal ---
 
 func TestGCounter_GetReturnsZeroForAbsent(t *testing.T) {
 	// arrange
@@ -59,6 +59,43 @@ func TestGCounter_CloneIsEqual(t *testing.T) {
 	require.Equal(t, uint64(2), clone.Get("n1"))
 	require.Equal(t, uint64(1), clone.Get("n2"))
 	require.Equal(t, og.Value(), clone.Value())
+}
+
+func TestGCounter_EqualIsTrueIffCountsMatch(t *testing.T) {
+	cases := []struct {
+		name     string
+		a, b     gcounter.GCounter
+		expected bool
+	}{
+		{
+			"same counts, different increment order",
+			gcounter.New().Increment("n1").Increment("n1").Increment("n2"),
+			gcounter.New().Increment("n2").Increment("n1").Increment("n1"),
+			true,
+		},
+		{
+			"different count on a shared node",
+			gcounter.New().Increment("n1").Increment("n1"),
+			gcounter.New().Increment("n1"),
+			false,
+		},
+		{
+			"one has an extra node",
+			gcounter.New().Increment("n1"),
+			gcounter.New().Increment("n1").Increment("n2"),
+			false,
+		},
+		{"both empty", gcounter.New(), gcounter.New(), true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// act + assert
+			require.True(t, c.a.Equal(c.a))
+			require.Equal(t, c.expected, c.a.Equal(c.b))
+			require.Equal(t, c.expected, c.b.Equal(c.a))
+		})
+	}
 }
 
 // --- merge ---
