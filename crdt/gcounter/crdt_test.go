@@ -259,6 +259,45 @@ func TestGCounter_MergeIsIdempotent(t *testing.T) {
 	}
 }
 
+// --- delta ---
+
+func TestGCounter_IncrementDeltaHasOneSlot(t *testing.T) {
+	// arrange
+	g := gcounter.New().Increment("n1").Increment("n2")
+
+	// act
+	delta := g.IncrementDelta("n1")
+
+	// assert
+	require.Equal(t, 1, delta.DotCount())
+	require.Equal(t, uint64(2), delta.Get("n1"))
+}
+
+func TestGCounter_IncrementDeltaMergesToSameAsIncrement(t *testing.T) {
+	cases := []struct {
+		name   string
+		base   gcounter.GCounter
+		nodeID string
+	}{
+		{"fresh node on empty", gcounter.New(), "n1"},
+		{"existing node raised", gcounter.New().Increment("n1").Increment("n1"), "n1"},
+		{"new node among others", gcounter.New().Increment("n1").Increment("n2"), "n3"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// act
+			viaDelta, err := c.base.Merge(c.base.IncrementDelta(c.nodeID)).Marshal()
+			require.NoError(t, err)
+			viaInc, err := c.base.Increment(c.nodeID).Marshal()
+			require.NoError(t, err)
+
+			// assert
+			require.Equal(t, viaInc, viaDelta)
+		})
+	}
+}
+
 // --- marshal / unmarshal ---
 
 func TestGCounter_MarshalUnmarshalRoundTrip(t *testing.T) {
@@ -388,4 +427,19 @@ func TestGCounter_UnmarshalRejectsHugeCount(t *testing.T) {
 
 	// assert
 	require.Error(t, err)
+}
+
+func TestGCounter_DeltaMarshalsSmallerThanFullState(t *testing.T) {
+	// arrange
+	g := gcounter.New().
+		Increment("n1").Increment("n2").Increment("n3")
+
+	// act
+	full, err := g.Marshal()
+	require.NoError(t, err)
+	delta, err := g.IncrementDelta("n1").Marshal()
+	require.NoError(t, err)
+
+	// assert
+	require.Less(t, len(delta), len(full))
 }
