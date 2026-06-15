@@ -55,10 +55,28 @@ func (pn PNCounter) Increment(nodeID string) PNCounter {
 	return PNCounter{p: pn.p.Increment(nodeID), n: pn.n}
 }
 
+// IncrementDelta returns the delta for incrementing nodeID. The receiver
+// is not modified, and callers pass their own node id and only their own.
+//
+//	pn.Merge(pn.IncrementDelta(n)) == pn.Increment(n)
+func (pn PNCounter) IncrementDelta(nodeID string) PNCounter {
+	return PNCounter{p: pn.p.IncrementDelta(nodeID), n: gcounter.New()}
+}
+
 // Decrement returns a new counter with nodeID's decrement slot raised by
 // 1. A decrement raises the N counter. It does not lower the P counter.
+// The receiver is not modified, and callers pass their own node id and
+// only their own.
 func (pn PNCounter) Decrement(nodeID string) PNCounter {
 	return PNCounter{p: pn.p, n: pn.n.Increment(nodeID)}
+}
+
+// DecrementDelta returns the delta for decrementing nodeID. The receiver
+// is not modified, and callers pass their own node id and only their own.
+//
+//	pn.Merge(pn.DecrementDelta(n)) == pn.Decrement(n)
+func (pn PNCounter) DecrementDelta(nodeID string) PNCounter {
+	return PNCounter{p: gcounter.New(), n: pn.n.IncrementDelta(nodeID)}
 }
 
 // Clone returns a deep copy.

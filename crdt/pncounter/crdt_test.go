@@ -227,6 +227,62 @@ func TestPNCounter_MergeIsIdempotent(t *testing.T) {
 	}
 }
 
+// --- delta ---
+
+func TestPNCounter_IncrementDeltaPopulatesOnlyP(t *testing.T) {
+	// arrange
+	pn := pncounter.New().Increment("n1").Decrement("n1")
+
+	// act
+	delta := pn.IncrementDelta("n1")
+
+	// assert
+	require.Equal(t, uint64(2), delta.Increments())
+	require.Equal(t, uint64(0), delta.Decrements())
+}
+
+func TestPNCounter_DecrementDeltaPopulatesOnlyN(t *testing.T) {
+	// arrange
+	pn := pncounter.New().Increment("n1").Decrement("n1")
+
+	// act
+	delta := pn.DecrementDelta("n1")
+
+	// assert
+	require.Equal(t, uint64(0), delta.Increments())
+	require.Equal(t, uint64(2), delta.Decrements())
+}
+
+func TestPNCounter_DeltaMergesToSameAsStandardMutator(t *testing.T) {
+	cases := []struct {
+		name   string
+		base   pncounter.PNCounter
+		nodeID string
+	}{
+		{"empty base, new node", pncounter.New(), "n1"},
+		{"existing node both sides", pncounter.New().Increment("n1").Decrement("n1"), "n1"},
+		{"new node among others", pncounter.New().Increment("n1").Decrement("n2"), "n3"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// act + assert. Increment.
+			incDelta, err := c.base.Merge(c.base.IncrementDelta(c.nodeID)).Marshal()
+			require.NoError(t, err)
+			inc, err := c.base.Increment(c.nodeID).Marshal()
+			require.NoError(t, err)
+			require.Equal(t, inc, incDelta)
+
+			// act + assert. Decrement.
+			decDelta, err := c.base.Merge(c.base.DecrementDelta(c.nodeID)).Marshal()
+			require.NoError(t, err)
+			dec, err := c.base.Decrement(c.nodeID).Marshal()
+			require.NoError(t, err)
+			require.Equal(t, dec, decDelta)
+		})
+	}
+}
+
 // --- marshal / unmarshal ---
 
 func TestPNCounter_MarshalUnmarshalRoundTrip(t *testing.T) {
