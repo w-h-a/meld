@@ -81,6 +81,17 @@ func (g GCounter) Increment(nodeID string) GCounter {
 	return GCounter{dots: out}
 }
 
+// IncrementDelta returns the delta for incrementing nodeID, a counter
+// holding only nodeID's next dot. The receiver is not modified, and
+// callers pass their own node id and only their own.
+//
+//	g.Merge(g.IncrementDelta(n)) == g.Increment(n)
+func (g GCounter) IncrementDelta(nodeID string) GCounter {
+	return GCounter{
+		dots: []crdt.Dot{{Node: nodeID, Counter: g.Get(nodeID) + 1}},
+	}
+}
+
 // Clone returns a deep copy.
 func (g GCounter) Clone() GCounter {
 	if len(g.dots) == 0 {
