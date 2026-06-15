@@ -104,6 +104,21 @@ func (g GCounter) Clone() GCounter {
 	return GCounter{dots: out}
 }
 
+// Equal reports whether g and other hold the same count for every node.
+func (g GCounter) Equal(other GCounter) bool {
+	if len(g.dots) != len(other.dots) {
+		return false
+	}
+
+	for i := range g.dots {
+		if g.dots[i] != other.dots[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Merge returns the counter that knows the largest count each node has
 // reached. For every dot, it keeps the larger of the two inputs.
 //

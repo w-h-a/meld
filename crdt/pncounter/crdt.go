@@ -84,6 +84,12 @@ func (pn PNCounter) Clone() PNCounter {
 	return PNCounter{p: pn.p.Clone(), n: pn.n.Clone()}
 }
 
+// Equal reports whether pn and other hold the same incremements and the
+// same decrements, node for node.
+func (pn PNCounter) Equal(other PNCounter) bool {
+	return pn.p.Equal(other.p) && pn.n.Equal(other.n)
+}
+
 // Merge merges the two underlying G-Counters independently. P merges with
 // P and N merges with N. Each G-Counter converges on its own through
 // element-wise max. The reading is a pure function of the two converged

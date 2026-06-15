@@ -112,6 +112,30 @@ func (c CausalContext) Observe(node string, counter uint64) CausalContext {
 	return CausalContext{normals: normals, exceptions: exceptions}
 }
 
+// Equal reports whether c and other have observed the same set of dots.
+func (c CausalContext) Equal(other CausalContext) bool {
+	if c.normals.Compare(other.normals) != versionvector.Equal {
+		return false
+	}
+
+	if len(c.exceptions) != len(other.exceptions) {
+		return false
+	}
+
+	set := make(map[crdt.Dot]struct{}, len(c.exceptions))
+	for _, e := range c.exceptions {
+		set[e] = struct{}{}
+	}
+
+	for _, e := range other.exceptions {
+		if _, ok := set[e]; !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Merge returns a causal context holding every dot either side has seen.
 // It takes the larger count per node from the two normals, then observes
 // every exception from both sides into the result, folding each one in or

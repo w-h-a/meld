@@ -73,6 +73,52 @@ func TestORSet_CloneIsIndependent(t *testing.T) {
 	require.False(t, b.Contains("nginx"))
 }
 
+func TestSet_EqualIsTrueIffSameLiveAndSeen(t *testing.T) {
+	cases := []struct {
+		name     string
+		a, b     orset.ORSet[string]
+		expected bool
+	}{
+		{
+			"same elements, different add order",
+			orset.New[string]().Add("n1", "x").Add("n2", "y"),
+			orset.New[string]().Add("n2", "y").Add("n1", "x"),
+			true,
+		},
+		{
+			"different live element",
+			orset.New[string]().Add("n1", "x"),
+			orset.New[string]().Add("n1", "y"),
+			false,
+		},
+		{
+			"same live, different seen",
+			orset.New[string]().Add("n1", "x").Add("n1", "y").Remove("y"),
+			orset.New[string]().Add("n1", "x"),
+			false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.True(t, c.a.Equal(c.a))
+			require.Equal(t, c.expected, c.a.Equal(c.b))
+			require.Equal(t, c.expected, c.b.Equal(c.a))
+		})
+	}
+}
+
+func TestSet_EqualDetectsWhetherADeltaAddsAnything(t *testing.T) {
+	// arrange
+	base := orset.New[string]().Add("n1", "nginx")
+	addDelta := base.AddDelta("n1", "ssh")
+
+	// act + assert
+	require.False(t, base.Equal(base.Merge(addDelta)))
+	absorbed := base.Merge(addDelta)
+	require.True(t, absorbed.Equal(absorbed.Merge(addDelta)))
+}
+
 // --- add-wins policy ---
 
 func TestORSet_ConcurrentAddRemoveYieldsAddWins(t *testing.T) {
