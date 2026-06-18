@@ -74,7 +74,7 @@ func (r *basicReplicator[T]) Submit(delta T) {
 // State returns the current converged CRDT state.
 func (r *basicReplicator[T]) State() T {
 	r.mtx.RLock()
-	defer r.mtx.Unlock()
+	defer r.mtx.RUnlock()
 
 	return r.state
 }

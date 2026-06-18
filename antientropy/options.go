@@ -40,7 +40,7 @@ func NewOptions[T crdt.Mergeable[T]](opts ...Option[T]) Options[T] {
 	return options
 }
 
-// WithInitial set sthe starting CRDT state.
+// WithInitial sets the starting CRDT state.
 func WithInitial[T crdt.Mergeable[T]](initial T) Option[T] {
 	return func(o *Options[T]) {
 		o.Initial = initial

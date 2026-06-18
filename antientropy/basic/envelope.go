@@ -2,7 +2,7 @@ package basic
 
 import "encoding/json"
 
-// envelope is the on-the-wire frame for a basic anti-entripy message.
+// envelope is the on-the-wire frame for a basic anti-entropy message.
 // Payload is a marshalled CRDT state, a delta-group or a full state, that
 // the receiver merges into its own. Carrier holds the W3C trace context so
 // a receive links back to the sender's gossip round.
