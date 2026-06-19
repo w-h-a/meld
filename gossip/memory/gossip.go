@@ -18,6 +18,12 @@ type memoryGossip struct {
 	inbox     chan *gossip.Packet
 	listening atomic.Bool
 	once      sync.Once
+
+	dropEvery int
+	reorder   bool
+
+	mtx   sync.RWMutex
+	links map[string]*link
 }
 
 func New(opts ...gossip.Option) (gossip.Gossip, error) {
@@ -32,10 +38,14 @@ func New(opts ...gossip.Option) (gossip.Gossip, error) {
 	nw.register(options.BindAddress, inbox)
 
 	g := &memoryGossip{
-		options: options,
-		net:     nw,
-		addr:    addr(options.BindAddress),
-		inbox:   inbox,
+		options:   options,
+		net:       nw,
+		addr:      addr(options.BindAddress),
+		inbox:     inbox,
+		dropEvery: dropEveryFrom(options.Context),
+		reorder:   reorderFrom(options.Context),
+		mtx:       sync.RWMutex{},
+		links:     map[string]*link{},
 	}
 
 	return g, nil
@@ -64,12 +74,7 @@ func (g *memoryGossip) SendTo(ctx context.Context, addr net.Addr, msg []byte) er
 		return err
 	}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case inbox <- &gossip.Packet{From: g.addr, Data: msg}:
-		return nil
-	}
+	return g.deliver(ctx, addr.String(), inbox, msg)
 }
 
 // Stop removes the transport from the network. It does not close the
@@ -104,16 +109,53 @@ func (g *memoryGossip) Broadcast(ctx context.Context, peers []net.Addr, msg []by
 			continue
 		}
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case inbox <- &gossip.Packet{From: g.addr, Data: msg}:
-			sent++
+		if err := g.deliver(ctx, peer.String(), inbox, msg); err != nil {
+			return err
 		}
+
+		sent++
 	}
 
 	if sent == 0 && lastErr != nil {
 		return lastErr
+	}
+
+	return nil
+}
+
+// deliver applies the loss and reoder knobs to one message bound for
+// dest, then pushes whatever survives onto its inbox.
+func (g *memoryGossip) deliver(ctx context.Context, dest string, inbox chan *gossip.Packet, msg []byte) error {
+	g.mtx.Lock()
+
+	l := g.links[dest]
+	if l == nil {
+		l = &link{}
+		g.links[dest] = l
+	}
+	l.count++
+
+	var out []*gossip.Packet
+	switch {
+	case g.dropEvery > 0 && l.count%g.dropEvery == 0:
+		// dropped
+	case g.reorder && l.held == nil:
+		l.held = &gossip.Packet{From: g.addr, Data: msg}
+	case g.reorder:
+		out = []*gossip.Packet{{From: g.addr, Data: msg}, l.held}
+		l.held = nil
+	default:
+		out = []*gossip.Packet{{From: g.addr, Data: msg}}
+	}
+
+	g.mtx.Unlock()
+
+	for _, pkt := range out {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case inbox <- pkt:
+		}
 	}
 
 	return nil
