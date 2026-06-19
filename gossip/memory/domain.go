@@ -12,6 +12,12 @@ type addr string
 func (a addr) Network() string { return "memory" }
 func (a addr) String() string  { return string(a) }
 
+// link is the per-destination delivery state the chaos knobs need.
+type link struct {
+	count int
+	held  *gossip.Packet
+}
+
 // Network is the shared fabric memory transports register on to
 // deliver to each other's inboxes.
 type Network struct {
