@@ -8,14 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/w-h-a/meld/antientropy"
 	"github.com/w-h-a/meld/antientropy/basic"
+	"github.com/w-h-a/meld/crdt"
 	"github.com/w-h-a/meld/crdt/gcounter"
+	"github.com/w-h-a/meld/crdt/lwwregister"
 	"github.com/w-h-a/meld/gossip"
 	"github.com/w-h-a/meld/gossip/memory"
 	"github.com/w-h-a/meld/membership"
 	"github.com/w-h-a/meld/membership/stub"
 )
 
-func TestBasic_NodesConverge(t *testing.T) {
+func TestBasic_GCounter_NodesConverge(t *testing.T) {
 	// arrange
 	net := memory.NewNetwork()
 
@@ -28,9 +30,9 @@ func TestBasic_NodesConverge(t *testing.T) {
 	opts := []gossip.Option{memory.WithNetwork(net)}
 
 	nodes := []antientropy.Replicator[gcounter.GCounter]{
-		newNode(t, "n1", cluster, opts...),
-		newNode(t, "n2", cluster, opts...),
-		newNode(t, "n3", cluster, opts...),
+		newNode(t, "n1", cluster, gcounter.New(), encodeGCounter, decodeGCounter, opts...),
+		newNode(t, "n2", cluster, gcounter.New(), encodeGCounter, decodeGCounter, opts...),
+		newNode(t, "n3", cluster, gcounter.New(), encodeGCounter, decodeGCounter, opts...),
 	}
 
 	ctx := context.Background()
@@ -61,7 +63,7 @@ func TestBasic_NodesConverge(t *testing.T) {
 	}
 }
 
-func TestBasic_ConvergesUnderLossAndReorder(t *testing.T) {
+func TestBasic_GCounter_ConvergesUnderLossAndReorder(t *testing.T) {
 	// arrange
 	net := memory.NewNetwork()
 
@@ -74,9 +76,9 @@ func TestBasic_ConvergesUnderLossAndReorder(t *testing.T) {
 	opts := []gossip.Option{memory.WithNetwork(net), memory.WithDropEvery(2), memory.WithReorder()}
 
 	nodes := []antientropy.Replicator[gcounter.GCounter]{
-		newNode(t, "n1", cluster, opts...),
-		newNode(t, "n2", cluster, opts...),
-		newNode(t, "n3", cluster, opts...),
+		newNode(t, "n1", cluster, gcounter.New(), encodeGCounter, decodeGCounter, opts...),
+		newNode(t, "n2", cluster, gcounter.New(), encodeGCounter, decodeGCounter, opts...),
+		newNode(t, "n3", cluster, gcounter.New(), encodeGCounter, decodeGCounter, opts...),
 	}
 
 	ctx := context.Background()
@@ -109,6 +111,53 @@ func TestBasic_ConvergesUnderLossAndReorder(t *testing.T) {
 	}
 }
 
+func TestBasic_LWWRegister_NodesConverge(t *testing.T) {
+	// arrange
+	net := memory.NewNetwork()
+
+	cluster := []membership.Node{
+		{ID: "n1", Address: "n1", State: membership.Alive},
+		{ID: "n2", Address: "n2", State: membership.Alive},
+		{ID: "n3", Address: "n3", State: membership.Alive},
+	}
+
+	opts := []gossip.Option{memory.WithNetwork(net)}
+
+	nodes := []antientropy.Replicator[lwwregister.LWWRegister[string]]{
+		newNode(t, "n1", cluster, lwwregister.New[string](), encodeLWWRegister, decodeLWWRegister, opts...),
+		newNode(t, "n2", cluster, lwwregister.New[string](), encodeLWWRegister, decodeLWWRegister, opts...),
+		newNode(t, "n3", cluster, lwwregister.New[string](), encodeLWWRegister, decodeLWWRegister, opts...),
+	}
+
+	nodes[0].Submit(nodes[0].State().Set("n1", "a"))
+	nodes[1].Submit(nodes[1].State().Set("n2", "b"))
+	nodes[2].Submit(nodes[2].State().Set("n3", "c"))
+
+	ctx := context.Background()
+
+	// act
+	for _, n := range nodes {
+		require.NoError(t, n.Start(ctx))
+	}
+
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		for _, n := range nodes {
+			_ = n.Stop(stopCtx)
+		}
+	}()
+
+	// assert. The tags tie at counter 1, so the Writer breaks the tie.
+	// "n3" is the lexical max, so the basic node carries every replica to
+	// its value, "c", by joining full states.
+	for _, n := range nodes {
+		require.Eventually(t, func() bool {
+			return n.State().Value() == "c"
+		}, time.Second, 10*time.Millisecond)
+	}
+}
+
 func encodeGCounter(g gcounter.GCounter) ([]byte, error) {
 	return g.Marshal()
 }
@@ -119,12 +168,29 @@ func decodeGCounter(b []byte) (gcounter.GCounter, error) {
 	return g, err
 }
 
-func newNode(
+func encodeLWWRegister(lww lwwregister.LWWRegister[string]) ([]byte, error) {
+	return lww.Marshal(func(s string) ([]byte, error) {
+		return []byte(s), nil
+	})
+}
+
+func decodeLWWRegister(b []byte) (lwwregister.LWWRegister[string], error) {
+	var lww lwwregister.LWWRegister[string]
+	err := lww.Unmarshal(b, func(b []byte) (string, error) {
+		return string(b), nil
+	})
+	return lww, err
+}
+
+func newNode[T crdt.Mergeable[T]](
 	t *testing.T,
 	id string,
 	cluster []membership.Node,
+	initial T,
+	encode antientropy.Encoder[T],
+	decode antientropy.Decoder[T],
 	transportOpts ...gossip.Option,
-) antientropy.Replicator[gcounter.GCounter] {
+) antientropy.Replicator[T] {
 	t.Helper()
 
 	opts := append(
@@ -143,11 +209,11 @@ func newNode(
 	require.NoError(t, err)
 
 	r, err := basic.New(
-		antientropy.WithInitial(gcounter.New()),
-		antientropy.WithCodec(encodeGCounter, decodeGCounter),
-		antientropy.WithTransport[gcounter.GCounter](transport),
-		antientropy.WithMembership[gcounter.GCounter](memb),
-		antientropy.WithInterval[gcounter.GCounter](10*time.Millisecond),
+		antientropy.WithInitial(initial),
+		antientropy.WithCodec(encode, decode),
+		antientropy.WithTransport[T](transport),
+		antientropy.WithMembership[T](memb),
+		antientropy.WithInterval[T](10*time.Millisecond),
 	)
 	require.NoError(t, err)
 
