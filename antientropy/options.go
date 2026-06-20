@@ -7,6 +7,7 @@ import (
 	"github.com/w-h-a/meld/crdt"
 	"github.com/w-h-a/meld/gossip"
 	"github.com/w-h-a/meld/membership"
+	"github.com/w-h-a/meld/store"
 )
 
 // Option configures a Replicator
@@ -22,6 +23,7 @@ type Options[T crdt.Mergeable[T]] struct {
 	OnSend      OnSend[T]
 	Transport   gossip.Gossip
 	Membership  membership.Membership
+	Store       store.Store
 	Interval    time.Duration
 	Context     context.Context
 }
@@ -88,6 +90,13 @@ func WithTransport[T crdt.Mergeable[T]](g gossip.Gossip) Option[T] {
 func WithMembership[T crdt.Mergeable[T]](m membership.Membership) Option[T] {
 	return func(o *Options[T]) {
 		o.Membership = m
+	}
+}
+
+// WithStore sets the store implementation.
+func WithStore[T crdt.Mergeable[T]](s store.Store) Option[T] {
+	return func(o *Options[T]) {
+		o.Store = s
 	}
 }
 
