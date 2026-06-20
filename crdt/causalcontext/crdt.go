@@ -10,8 +10,8 @@ import (
 	"github.com/w-h-a/meld/crdt/versionvector"
 )
 
-// Make sure CausalContext satisfies crdt.Mergeable.
-var _ crdt.Mergeable[CausalContext] = CausalContext{}
+// Make sure CausalContext satisfies crdt.Equatable.
+var _ crdt.Equatable[CausalContext] = CausalContext{}
 
 // CausalContext is the set of dots a replica has seen, in two parts.
 // normals counts each node up from 1, with no holes. {n1: 3} means the replica
