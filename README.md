@@ -11,7 +11,8 @@ Go library providing gossip transport, membership, and conflict-free replicated 
 | `gossip/`            | `udp`, `tcp`                                                                      | Point-to-point and epidemic gossip transport |
 | `membership/`        | `swim`, `phi`                                                                     | Cluster membership and failure detection     |
 | `crdt/`              | `gcounter`, `pncounter`, `lwwregister`, `versionvector`, `causalcontext`, `orset` | Conflict-free replicated data types          |
-| `antientropy/`       | `basic`, `causal`                                                                 | TK                                           |
+| `antientropy/`       | `basic`, `causal`                                                                 | CRDT convergence                             |
+| `store/`             | `memory`, `sqlite`                                                                | Durable persistence                          |
 | `util/rendezvous/`   |                                                                                   | Deterministic placement without coordination |
 | `util/tracecontext/` |                                                                                   | Move W3C trace context across the wire       |
 
