@@ -15,8 +15,8 @@ import (
 	"github.com/w-h-a/meld/crdt/gcounter"
 )
 
-// Make sure PNCounter satisfies crdt.Mergeable.
-var _ crdt.Mergeable[PNCounter] = PNCounter{}
+// Make sure PNCounter satisfies crdt.Equatable.
+var _ crdt.Equatable[PNCounter] = PNCounter{}
 
 // PNCounter is a counter that goes both up and down without
 // coordination. It holds two G-Counters. P counts increments and N

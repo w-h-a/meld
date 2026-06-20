@@ -14,8 +14,8 @@ import (
 	"github.com/w-h-a/meld/crdt"
 )
 
-// Make sure GCounter satisfies crdt.Mergeable.
-var _ crdt.Mergeable[GCounter] = GCounter{}
+// Make sure GCounter satisfies crdt.Equatable.
+var _ crdt.Equatable[GCounter] = GCounter{}
 
 // GCounter is a grow-only counter. It holds one dot per node, keyed
 // by node id. A node only ever raises its own dot, and the counter's

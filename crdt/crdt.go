@@ -33,6 +33,13 @@ func (d Dot) Compare(other Dot) int {
 	}
 }
 
+// Equatable is a Mergeable whose states can also be compared for value
+// equality.
+type Equatable[T any] interface {
+	Mergeable[T]
+	Equal(other T) bool
+}
+
 // Mergeable is the core CRDT contract. Merge must be:
 //   - Commutative: Merge(a, b) == Merge(b, a)
 //   - Associative: Merge(Merge(a, b), c) == Merge(a, Merge(b, c))

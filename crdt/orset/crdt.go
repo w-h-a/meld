@@ -13,10 +13,10 @@ import (
 	"github.com/w-h-a/meld/crdt/causalcontext"
 )
 
-// Make sure ORSet satisfies crdt.Mergeable. The witness uses a
+// Make sure ORSet satisfies crdt.Equatable. The witness uses a
 // concrete instantiation because Go generics require one for a
 // compile-time interface check.
-var _ crdt.Mergeable[ORSet[struct{}]] = ORSet[struct{}]{}
+var _ crdt.Equatable[ORSet[struct{}]] = ORSet[struct{}]{}
 
 // ORSet is the optimized state-based Observed-Remove Set. It holds a
 // live G(row only)-Set of (element, node, counter) triples and a
