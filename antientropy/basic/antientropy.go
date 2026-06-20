@@ -38,7 +38,7 @@ type basicReplicator[T crdt.Mergeable[T]] struct {
 }
 
 func New[T crdt.Mergeable[T]](opts ...antientropy.Option[T]) (antientropy.Replicator[T], error) {
-	options := antientropy.NewOptions[T](opts...)
+	options := antientropy.NewOptions(opts...)
 
 	switch {
 	case options.Encoder == nil || options.Decoder == nil:
