@@ -185,7 +185,7 @@ func (r *basicReplicator[T]) receive(pkt *gossip.Packet) {
 	r.mtx.Unlock()
 
 	if r.options.OnReceive != nil {
-		r.options.OnReceive(ctx, before, after)
+		r.options.OnReceive(ctx, before, delta, after)
 	}
 }
 
