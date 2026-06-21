@@ -4,15 +4,15 @@ import (
 	"context"
 	"log"
 	"math/rand/v2"
-	"net"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/w-h-a/meld/antientropy"
+	"github.com/w-h-a/meld/antientropy/basic"
 	"github.com/w-h-a/meld/crdt/pncounter"
 	"github.com/w-h-a/meld/gossip"
 	"github.com/w-h-a/meld/gossip/udp"
@@ -20,7 +20,6 @@ import (
 	"github.com/w-h-a/meld/membership/swim"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -36,12 +35,6 @@ import (
 // port stay decoupled.
 const metaCRDTAddr = "crdt_addr"
 
-// tracer is the demo's instrumentation scope. It is fetched at import
-// time, before initTracer installs the real provider. That is safe
-// because the otel global delegates. Spans created before the provider
-// is set go nowhere, and nothing here traces until main wires it up.
-var tracer = otel.Tracer("meld/examples/pncounternode")
-
 func main() {
 	nodeID := envOrFail("NODE_ID")
 	bindAddr := envOrFail("BIND_ADDR")
@@ -53,7 +46,7 @@ func main() {
 	probeInterval := durationOr("PROBE_INTERVAL", time.Second)
 	probeTimeout := durationOr("PROBE_TIMEOUT", 300*time.Millisecond)
 	suspicionMult := intOr("SUSPICION_MULT", 4)
-	eventsPerSec := intOr("EVENTS_PER_SEC", 5)
+	eventInterval := durationOr("EVENT_INTERVAL", 200*time.Millisecond)
 	decrementProb := floatOr("DECREMENT_PROBABILITY", 0.5)
 	gossipInterval := durationOr("GOSSIP_INTERVAL", 2*time.Second)
 
@@ -92,9 +85,25 @@ func main() {
 		log.Fatalf("crdt udp.New: %v", err)
 	}
 
-	crdtCh, err := cg.Listen(ctx)
+	// The Replicator runs Algorithm 1 anti-entropy over the PN-Counter:
+	// it owns the gossip-and-merge loop.
+	r, err := basic.New(
+		antientropy.WithInitial(pncounter.New()),
+		antientropy.WithCodec(encodeCounter, decodeCounter),
+		antientropy.WithPeerAddress[pncounter.PNCounter](crdtPeerAddress),
+		antientropy.WithOnReceive(onReceive(nodeID)),
+		antientropy.WithOnSend(onSend(nodeID)),
+		antientropy.WithTransport[pncounter.PNCounter](cg),
+		antientropy.WithMembership[pncounter.PNCounter](m),
+		antientropy.WithInterval[pncounter.PNCounter](gossipInterval),
+	)
 	if err != nil {
-		log.Fatalf("crdt Listen: %v", err)
+		log.Fatalf("basic.New: %v", err)
+	}
+
+	// Start opens the CRDT transport's listener and the gossip loops.
+	if err := r.Start(ctx); err != nil {
+		log.Fatalf("replicator Start: %v", err)
 	}
 
 	// Join seeded cluster.
@@ -108,11 +117,7 @@ func main() {
 	}
 	log.Printf("%s joined; bind=%s advertise=%s crdt=%s seeds=%v", nodeID, bindAddr, advertiseAddr, crdtAdvertiseAddr, seeds)
 
-	state := newCounter()
-
-	go eventLoop(ctx, nodeID, eventsPerSec, decrementProb, state)
-	go receiveLoop(ctx, crdtCh, state, nodeID)
-	go broadcastLoop(ctx, cg, m, state, nodeID, gossipInterval)
+	go eventLoop(ctx, nodeID, eventInterval, decrementProb, r)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
@@ -125,6 +130,9 @@ func main() {
 
 	leaveCtx, leaveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer leaveCancel()
+	if err := r.Stop(leaveCtx); err != nil {
+		log.Printf("replicator Stop: %v", err)
+	}
 	if err := m.Leave(leaveCtx); err != nil {
 		log.Printf("Leave: %v", err)
 	}
@@ -133,122 +141,60 @@ func main() {
 	}
 }
 
-// counter is the mutable shell around the PN-Counter functional core.
-// PN-Counter is an immutable value, so every mutator returns a fresh
-// counter and a snapshot is safe to marshal while other goroutines
-// mutate. The mutex binds the three writers (local events, incoming
-// merges) and the readers (broadcast, logging) to one current value.
-type counter struct {
-	mu sync.Mutex
-	pn pncounter.PNCounter
+// encodeCounter and decodeCounter adapt the PN-Counter's own
+// marshaling to the antientropy codec the Replicator ships state with.
+func encodeCounter(c pncounter.PNCounter) ([]byte, error) {
+	return c.Marshal()
 }
 
-func newCounter() *counter {
-	return &counter{pn: pncounter.New()}
+func decodeCounter(b []byte) (pncounter.PNCounter, error) {
+	var c pncounter.PNCounter
+	err := c.Unmarshal(b)
+	return c, err
 }
 
-func (c *counter) increment(id string) {
-	c.mu.Lock()
-	c.pn = c.pn.Increment(id)
-	c.mu.Unlock()
+// crdtPeerAddress resolves a member's CRDT-state address from the
+// crdt_addr it advertises through membership Meeta.
+func crdtPeerAddress(n membership.Node) (string, bool) {
+	addr := n.Meta[metaCRDTAddr]
+	return addr, addr != ""
 }
 
-func (c *counter) decrement(id string) {
-	c.mu.Lock()
-	c.pn = c.pn.Decrement(id)
-	c.mu.Unlock()
-}
-
-func (c *counter) merge(other pncounter.PNCounter) {
-	c.mu.Lock()
-	c.pn = c.pn.Merge(other)
-	c.mu.Unlock()
-}
-
-func (c *counter) snapshot() pncounter.PNCounter {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.pn
-}
-
-// eventLoop simulates a fluctuating pool of open connections. Each tick
-// it either opens a connection (increment) or closes one (decrement),
-// touching only this node's own slot. When DECREMENT_PROBABILITY exceeds
-// 0.5 across the cluster, decrements outpace increments and the
-// converged reading trends negative.
-func eventLoop(ctx context.Context, nodeID string, eventsPerSec int, decrementProb float64, state *counter) {
-	if eventsPerSec < 1 {
-		eventsPerSec = 1
-	}
-
-	ticker := time.NewTicker(time.Second / time.Duration(eventsPerSec))
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if rand.Float64() < decrementProb {
-				state.decrement(nodeID)
-				continue
-			}
-			state.increment(nodeID)
-		}
+// onReceive enriches the Replicator's receive span with the converged
+// PN-Counter reading after each merge.
+func onReceive(nodeID string) antientropy.OnReceive[pncounter.PNCounter] {
+	return func(ctx context.Context, before, _, after pncounter.PNCounter) {
+		trace.SpanFromContext(ctx).SetAttributes(
+			attribute.String("crdt.node_id", nodeID),
+			attribute.Int64("crdt.value", after.Value()),
+			attribute.Int64("crdt.p_sum", int64(after.Increments())),
+			attribute.Int64("crdt.n_sum", int64(after.Decrements())),
+		)
 	}
 }
 
-// receiveLoop drains incoming CRDT datagrams and merges each into local
-// state until the context is cancelled or the transport closes the
-// channel.
-func receiveLoop(ctx context.Context, ch <-chan *gossip.Packet, state *counter, nodeID string) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case pkt, ok := <-ch:
-			if !ok {
-				return
-			}
-			mergePacket(pkt, state, nodeID)
-		}
+// onSend enriches the Replicator's gossip span with the local reading
+// shipped this round.
+func onSend(nodeID string) antientropy.OnSend[pncounter.PNCounter] {
+	return func(ctx context.Context, state pncounter.PNCounter) {
+		trace.SpanFromContext(ctx).SetAttributes(
+			attribute.String("crdt.node_id", nodeID),
+			attribute.Int64("crdt.value", state.Value()),
+			attribute.Int64("crdt.p_sum", int64(state.Increments())),
+			attribute.Int64("crdt.n_sum", int64(state.Decrements())),
+		)
+		log.Printf("%s value=%d p=%d n=%d", nodeID, state.Value(), state.Increments(), state.Decrements())
 	}
 }
 
-// mergePacket parses one datagram into a PN-Counter and merges it. The
-// datagram boundary is where untrusted bytes become a domain value, so
-// a parse failure is caller input and gets a bare span event, not a
-// recorded error.
-func mergePacket(pkt *gossip.Packet, state *counter, nodeID string) {
-	_, span := tracer.Start(context.Background(), "pncounter.merge", trace.WithAttributes(
-		attribute.String("crdt.node_id", nodeID),
-		attribute.String("gossip.sender_address", pkt.From.String()),
-		attribute.Int("gossip.message_bytes", len(pkt.Data)),
-	))
-	defer span.End()
-
-	var incoming pncounter.PNCounter
-	if err := incoming.Unmarshal(pkt.Data); err != nil {
-		span.AddEvent("pncounter.unmarshal_error", trace.WithAttributes(
-			attribute.String("error.message", err.Error()),
-		))
-		return
-	}
-
-	state.merge(incoming)
-
-	snap := state.snapshot()
-	span.SetAttributes(
-		attribute.Int64("crdt.value", snap.Value()),
-		attribute.Int64("crdt.p_sum", int64(snap.Increments())),
-		attribute.Int64("crdt.n_sum", int64(snap.Decrements())),
-	)
-}
-
-// broadcastLoop ships full local state to live peers once per interval.
-// Full-state anti-entropy is idempotent, so loss, reordering, and
-// duplicates do not corrupt convergence.
-func broadcastLoop(ctx context.Context, transport gossip.Gossip, m membership.Membership, state *counter, nodeID string, interval time.Duration) {
+// eventLoop simulates a fluctuating pool of open conns.
+func eventLoop(
+	ctx context.Context,
+	nodeID string,
+	interval time.Duration,
+	decrementProb float64,
+	r antientropy.Replicator[pncounter.PNCounter],
+) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -257,75 +203,13 @@ func broadcastLoop(ctx context.Context, transport gossip.Gossip, m membership.Me
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			broadcastState(transport, m, state, nodeID)
+			if rand.Float64() < decrementProb {
+				r.Submit(r.State().DecrementDelta(nodeID))
+				continue
+			}
+			r.Submit(r.State().IncrementDelta(nodeID))
 		}
 	}
-}
-
-func broadcastState(transport gossip.Gossip, m membership.Membership, state *counter, nodeID string) {
-	snap := state.snapshot()
-
-	data, err := snap.Marshal()
-	if err != nil {
-		_, span := tracer.Start(context.Background(), "pncounter.broadcast")
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		span.End()
-		return
-	}
-
-	peers := crdtPeers(m, transport, nodeID)
-
-	ctx, span := tracer.Start(context.Background(), "pncounter.broadcast", trace.WithAttributes(
-		attribute.String("crdt.node_id", nodeID),
-		attribute.Int64("crdt.value", snap.Value()),
-		attribute.Int64("crdt.p_sum", int64(snap.Increments())),
-		attribute.Int64("crdt.n_sum", int64(snap.Decrements())),
-		attribute.Int("crdt.peer_count", len(peers)),
-		attribute.Int("gossip.message_bytes", len(data)),
-	))
-	defer span.End()
-
-	log.Printf("%s value=%d p=%d n=%d peers=%d", nodeID, snap.Value(), snap.Increments(), snap.Decrements(),
-		len(peers))
-
-	if len(peers) == 0 {
-		return
-	}
-
-	if err := transport.Broadcast(ctx, peers, data); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-	}
-}
-
-// crdtPeers resolves the CRDT addresses of every live, non-self member
-// that has advertised one through membership Meta. A member whose Meta
-// has not yet propagated is skipped this round and picked up once SWIM
-// converges.
-func crdtPeers(m membership.Membership, transport gossip.Transport, selfID string) []net.Addr {
-	members := m.Members()
-	addrs := make([]net.Addr, 0, len(members))
-
-	for _, n := range members {
-		if n.ID == selfID || n.State != membership.Alive {
-			continue
-		}
-
-		raw := n.Meta[metaCRDTAddr]
-		if raw == "" {
-			continue
-		}
-
-		addr, err := transport.Resolve(raw)
-		if err != nil {
-			continue
-		}
-
-		addrs = append(addrs, addr)
-	}
-
-	return addrs
 }
 
 func initTracer(ctx context.Context, serviceName, endpoint string) (func(), error) {

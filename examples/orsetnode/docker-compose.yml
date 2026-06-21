@@ -23,7 +23,7 @@ services:
       PROBE_INTERVAL: "5s"
       PROBE_TIMEOUT: "1s"
       SUSPICION_MULT: "8"
-      EVENTS_PER_SEC: "1"
+      EVENTS_INTERVAL: '5s'
       REMOVE_PROBABILITY: "0.3"
       WORKLOAD_POOL_SIZE: "8"
       GOSSIP_INTERVAL: "1s"
@@ -44,7 +44,7 @@ services:
       PROBE_INTERVAL: "5s"
       PROBE_TIMEOUT: "1s"
       SUSPICION_MULT: "8"
-      EVENTS_PER_SEC: "1"
+      EVENTS_INTERVAL: '5s'
       REMOVE_PROBABILITY: "0.3"
       WORKLOAD_POOL_SIZE: "8"
       GOSSIP_INTERVAL: "1s"
@@ -67,7 +67,7 @@ services:
       PROBE_INTERVAL: "5s"
       PROBE_TIMEOUT: "1s"
       SUSPICION_MULT: "8"
-      EVENTS_PER_SEC: "1"
+      EVENTS_INTERVAL: '5s'
       REMOVE_PROBABILITY: "0.3"
       WORKLOAD_POOL_SIZE: "8"
       GOSSIP_INTERVAL: "1s"

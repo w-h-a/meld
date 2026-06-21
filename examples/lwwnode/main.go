@@ -2,28 +2,25 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"math/rand/v2"
-	"net"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/w-h-a/meld/antientropy"
+	"github.com/w-h-a/meld/antientropy/basic"
 	"github.com/w-h-a/meld/crdt"
 	"github.com/w-h-a/meld/crdt/lwwregister"
 	"github.com/w-h-a/meld/gossip"
 	"github.com/w-h-a/meld/gossip/udp"
 	"github.com/w-h-a/meld/membership"
 	"github.com/w-h-a/meld/membership/swim"
-	"github.com/w-h-a/meld/util/tracecontext"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -43,12 +40,6 @@ const metaCRDTAddr = "crdt_addr"
 // demo models a deploy color. The set is small so two nodes often pick
 // from the same handful and concurrent writes are easy to see.
 var palette = []string{"blue", "green", "amber", "violet", "crimson"}
-
-// tracer is the demo's instrumentation scope. It is fetched at import
-// time, before initTracer installs the real provider. That is safe
-// because the otel global delegates. Spans created before the provider
-// is set go nowhere, and nothing here traces until main wires it up.
-var tracer = otel.Tracer("meld/examples/lwwnode")
 
 func main() {
 	nodeID := envOrFail("NODE_ID")
@@ -99,9 +90,24 @@ func main() {
 		log.Fatalf("crdt udp.New: %v", err)
 	}
 
-	crdtCh, err := cg.Listen(ctx)
+	// The Replicator runs Algorithm 1 anti-entropy over the register.
+	r, err := basic.New(
+		antientropy.WithInitial(lwwregister.New[string]()),
+		antientropy.WithCodec(encodeRegister, decodeRegister),
+		antientropy.WithPeerAddress[lwwregister.LWWRegister[string]](crdtPeerAddress),
+		antientropy.WithOnReceive(onReceive(nodeID)),
+		antientropy.WithOnSend(onSend(nodeID)),
+		antientropy.WithTransport[lwwregister.LWWRegister[string]](cg),
+		antientropy.WithMembership[lwwregister.LWWRegister[string]](m),
+		antientropy.WithInterval[lwwregister.LWWRegister[string]](gossipInterval),
+	)
 	if err != nil {
-		log.Fatalf("crdt Listen: %v", err)
+		log.Fatalf("basic.New: %v", err)
+	}
+
+	// Start opens the CRDT transport's listener and the gossip loops.
+	if err := r.Start(ctx); err != nil {
+		log.Fatalf("replicator Start: %v", err)
 	}
 
 	// Join seeded cluster.
@@ -115,11 +121,7 @@ func main() {
 	}
 	log.Printf("%s joined; bind=%s advertise=%s crdt=%s seeds=%v", nodeID, bindAddr, advertiseAddr, crdtAdvertiseAddr, seeds)
 
-	state := newRegister()
-
-	go writeLoop(ctx, nodeID, writeInterval, state)
-	go receiveLoop(ctx, crdtCh, state, nodeID)
-	go broadcastLoop(ctx, cg, m, state, nodeID, gossipInterval)
+	go eventLoop(ctx, nodeID, writeInterval, r)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
@@ -132,6 +134,9 @@ func main() {
 
 	leaveCtx, leaveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer leaveCancel()
+	if err := r.Stop(leaveCtx); err != nil {
+		log.Printf("replicator Stop: %v", err)
+	}
 	if err := m.Leave(leaveCtx); err != nil {
 		log.Printf("Leave: %v", err)
 	}
@@ -140,45 +145,105 @@ func main() {
 	}
 }
 
-// register is the mutable shell around the LWW-Register functional
-// core. LWWRegister is an immutable value, so every mutator returns a
-// fresh register and a snapshot is safe to marshal while other
-// goroutines mutate. The mutex binds the writers (local writes,
-// incoming merges) and the readers (broadcast, logging) to one current
-// value.
-type register struct {
-	mu  sync.Mutex
-	reg lwwregister.LWWRegister[string]
+// encodeRegister and decodeRegister adapt the register's own marshaling
+// to the antientropy codec the Replicator ships state with.
+func encodeRegister(r lwwregister.LWWRegister[string]) ([]byte, error) {
+	return r.Marshal(crdt.StringEncode)
 }
 
-func newRegister() *register {
-	return &register{reg: lwwregister.New[string]()}
+func decodeRegister(b []byte) (lwwregister.LWWRegister[string], error) {
+	var r lwwregister.LWWRegister[string]
+	err := r.Unmarshal(b, crdt.StringDecode)
+	return r, err
 }
 
-func (r *register) set(nodeID, value string) {
-	r.mu.Lock()
-	r.reg = r.reg.Set(nodeID, value)
-	r.mu.Unlock()
+// crdtPeerAddress resolves a member's CRDT-state address from the
+// crdt_addr it advertises through membership Meeta.
+func crdtPeerAddress(n membership.Node) (string, bool) {
+	addr := n.Meta[metaCRDTAddr]
+	return addr, addr != ""
 }
 
-func (r *register) merge(other lwwregister.LWWRegister[string]) {
-	r.mu.Lock()
-	r.reg = r.reg.Merge(other)
-	r.mu.Unlock()
+// onReceive enriches the Replicator's receive span with the merge
+// outcome.
+func onReceive(nodeID string) antientropy.OnReceive[lwwregister.LWWRegister[string]] {
+	return func(ctx context.Context, before, delta, after lwwregister.LWWRegister[string]) {
+		// Name which write the register's totally ordered Tag kept.
+		//   - "remote": delta has the strictly greater Lamport counter, so
+		//     it saw at least as many writes as local and wins causally.
+		//   - "local": local has the strictly greater counter (delta is
+		//     causally stale) or the Tags are identical (a duplicate).
+		//   - "tiebreak": counters tie and writers differ. Equal counters
+		//     from two writers are provably concurrent, since either write
+		//     seeing the other would carry a strictly greater counter, so
+		//     the Writer id breaks the tie and one value is silently lost.
+		local, incoming := before.Tag(), delta.Tag()
+		winner := "tiebreak"
+		switch {
+		case local.Counter < incoming.Counter:
+			winner = "remote"
+		case local.Counter > incoming.Counter:
+			winner = "local"
+		case local.Writer == incoming.Writer:
+			winner = "local"
+		}
+
+		span := trace.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("crdt.node_id", nodeID),
+			attribute.String("crdt.value", after.Value()),
+			attribute.Int64("crdt.clock", int64(after.Tag().Counter)),
+			attribute.String("crdt.writer", after.Tag().Writer),
+			attribute.String("crdt.write_winner", winner),
+		)
+
+		if winner != "tiebreak" {
+			return
+		}
+
+		// Concurrent writes tied on the Lamport counter. The Writer
+		// tiebreak keeps one value and silently drops the other. Record the
+		// dropped value so the loss is visible. after.Tag() == before.Tag()
+		// means this node's own value won and the incoming delta was
+		// dropped; otherwise the incoming won and this node's value was.
+		dropped := before
+		if after.Tag() == before.Tag() {
+			dropped = delta
+		}
+
+		span.AddEvent("lwwregister.lost_concurrent_write", trace.WithAttributes(
+			attribute.String("crdt.kept_value", after.Value()),
+			attribute.String("crdt.kept_writer", after.Tag().Writer),
+			attribute.String("crdt.dropped_value", dropped.Value()),
+			attribute.String("crdt.dropped_writer", dropped.Tag().Writer),
+			attribute.Int64("crdt.clock", int64(after.Tag().Counter)),
+		))
+
+		log.Printf("%s lost concurrent write: kept=%q(%s) dropped=%q(%s) clock=%d",
+			nodeID, after.Value(), after.Tag().Writer, dropped.Value(), dropped.Tag().Writer, after.Tag().Counter)
+	}
 }
 
-func (r *register) snapshot() lwwregister.LWWRegister[string] {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.reg
+// onSend enriches the Replicator's gossip span with the register value
+// shipped this round.
+func onSend(nodeID string) antientropy.OnSend[lwwregister.LWWRegister[string]] {
+	return func(ctx context.Context, state lwwregister.LWWRegister[string]) {
+		trace.SpanFromContext(ctx).SetAttributes(
+			attribute.String("crdt.node_id", nodeID),
+			attribute.String("crdt.value", state.Value()),
+			attribute.Int64("crdt.clock", int64(state.Tag().Counter)),
+			attribute.String("crdt.writer", state.Tag().Writer),
+		)
+	}
 }
 
-// writeLoop publishes a new "active config" value on a fixed cadence.
-// Each write touches only this node's own Tag, because Set takes this
-// node's id and only its own. Between writes the cluster has several
-// gossip rounds to converge, so a reader watches the value settle and
-// then jump when the next write lands.
-func writeLoop(ctx context.Context, nodeID string, interval time.Duration, state *register) {
+// eventLoop publishes a new 'active config' value on a fixed cadence.
+func eventLoop(
+	ctx context.Context,
+	nodeID string,
+	interval time.Duration,
+	r antientropy.Replicator[lwwregister.LWWRegister[string]],
+) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -188,247 +253,9 @@ func writeLoop(ctx context.Context, nodeID string, interval time.Duration, state
 			return
 		case <-ticker.C:
 			value := palette[rand.IntN(len(palette))]
-			state.set(nodeID, value)
+			r.Submit(r.State().Set(nodeID, value))
 		}
 	}
-}
-
-// receiveLoop drains incoming CRDT datagrams and merges each into local
-// state until the context is cancelled or the transport closes the
-// channel.
-func receiveLoop(ctx context.Context, ch <-chan *gossip.Packet, state *register, nodeID string) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case pkt, ok := <-ch:
-			if !ok {
-				return
-			}
-			mergePacket(pkt, state, nodeID)
-		}
-	}
-}
-
-// mergePacket decodes one datagram into a frame, links the merge span
-// to the sender's broadcast span through the carried trace context,
-// then merges the register the frame holds. Both the frame decode and
-// the register unmarshal are datagram-boundary parses, so a failure is
-// caller input and gets a bare span event, not a recorded error.
-func mergePacket(pkt *gossip.Packet, state *register, nodeID string) {
-	var f frame
-	if err := json.Unmarshal(pkt.Data, &f); err != nil {
-		_, span := tracer.Start(context.Background(), "lwwregister.merge", trace.WithAttributes(
-			attribute.String("crdt.node_id", nodeID),
-			attribute.String("gossip.sender_address", pkt.From.String()),
-		))
-		span.AddEvent("lwwregister.frame_decode_error", trace.WithAttributes(
-			attribute.String("error.message", err.Error()),
-		))
-		span.End()
-		return
-	}
-
-	ctx := tracecontext.Extract(context.Background(), f.Carrier)
-
-	_, span := tracer.Start(ctx, "lwwregister.merge", trace.WithAttributes(
-		attribute.String("crdt.node_id", nodeID),
-		attribute.String("gossip.sender_address", pkt.From.String()),
-		attribute.Int("gossip.message_bytes", len(pkt.Data)),
-	))
-	defer span.End()
-
-	var incoming lwwregister.LWWRegister[string]
-	if err := incoming.Unmarshal(f.State, crdt.StringDecode); err != nil {
-		span.AddEvent("lwwregister.unmarshal_error", trace.WithAttributes(
-			attribute.String("error.message", err.Error()),
-		))
-		return
-	}
-
-	before := state.snapshot()
-	state.merge(incoming)
-	after := state.snapshot()
-
-	winner := writeOutcome(before.Tag(), incoming.Tag())
-
-	span.SetAttributes(
-		attribute.String("crdt.value", after.Value()),
-		attribute.Int64("crdt.clock", int64(after.Tag().Counter)),
-		attribute.String("crdt.writer", after.Tag().Writer),
-		attribute.String("crdt.write_winner", winner),
-	)
-
-	if winner != "tiebreak" {
-		return
-	}
-
-	// Concurrent writes. The two Tags share a Lamport counter and
-	// differ only in Writer, so neither write saw the other. The Writer
-	// tiebreak keeps one value and silently drops the other. We record
-	// the dropped value so the LWW tradeoff is visible.
-	dropped := before
-	if after.Tag() == before.Tag() {
-		dropped = incoming
-	}
-
-	span.AddEvent("lwwregister.lost_concurrent_write", trace.WithAttributes(
-		attribute.String("crdt.kept_value", after.Value()),
-		attribute.String("crdt.kept_writer", after.Tag().Writer),
-		attribute.String("crdt.dropped_value", dropped.Value()),
-		attribute.String("crdt.dropped_writer", dropped.Tag().Writer),
-		attribute.Int64("crdt.clock", int64(after.Tag().Counter)),
-	))
-
-	log.Printf("%s lost concurrent write: kept=%q(%s) dropped=%q(%s) clock=%d",
-		nodeID, after.Value(), after.Tag().Writer, dropped.Value(), dropped.Tag().Writer, after.Tag().Counter)
-}
-
-// writeOutcome names which write the register's totally ordered Tag
-// keeps when local merges incoming.
-//
-//   - "remote": incoming has the strictly greater Lamport counter, so
-//     it saw at least as many writes as local and wins causally.
-//   - "local": local has the strictly greater counter, so incoming is
-//     causally stale and is discarded.
-//   - "tiebreak": the counters are equal and the writers differ. Equal
-//     Lamport counters from two writers are provably concurrent. If
-//     either write had seen the other its counter would be strictly
-//     greater. So the Writer id breaks the tie and one value is lost.
-//
-// Equal counter and equal writer is the same write arriving again. The
-// merge is idempotent, so the outcome is "local" and nothing changes.
-//
-// Worked example. Both nodes start from a register at counter 1.
-//
-//	n1: Set("n1", "blue")   tag=(2, n1)
-//	n2: Set("n2", "green")  tag=(2, n2)
-//
-// Neither saw the other, so the counters tie at 2. Writer "n1" < "n2",
-// so n2's "green" wins and n1's "blue" is the lost concurrent write.
-//
-// Scope note. A scalar Lamport counter can only prove concurrency when
-// the counters tie. Two concurrent writes whose counters differ are
-// ordered by the counter and not flagged. That is correct LWW
-// behavior. The register keeps the higher Tag either way.
-func writeOutcome(local, incoming lwwregister.Tag) string {
-	switch {
-	case local.Counter < incoming.Counter:
-		return "remote"
-	case local.Counter > incoming.Counter:
-		return "local"
-	case local.Writer == incoming.Writer:
-		return "local"
-	default:
-		return "tiebreak"
-	}
-}
-
-// broadcastLoop ships full local state to live peers once per interval.
-// Full-state anti-entropy is idempotent, so loss, reordering, and
-// duplicates do not corrupt convergence.
-func broadcastLoop(ctx context.Context, transport gossip.Gossip, m membership.Membership, state *register, nodeID string, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			broadcastState(transport, m, state, nodeID)
-		}
-	}
-}
-
-func broadcastState(transport gossip.Gossip, m membership.Membership, state *register, nodeID string) {
-	snap := state.snapshot()
-
-	data, err := snap.Marshal(crdt.StringEncode)
-	if err != nil {
-		_, span := tracer.Start(context.Background(), "lwwregister.broadcast")
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		span.End()
-		return
-	}
-
-	peers := crdtPeers(m, transport, nodeID)
-
-	ctx, span := tracer.Start(context.Background(), "lwwregister.broadcast", trace.WithAttributes(
-		attribute.String("crdt.node_id", nodeID),
-		attribute.String("crdt.value", snap.Value()),
-		attribute.Int64("crdt.clock", int64(snap.Tag().Counter)),
-		attribute.String("crdt.writer", snap.Tag().Writer),
-		attribute.Int("crdt.peer_count", len(peers)),
-	))
-	defer span.End()
-
-	log.Printf("%s value=%q clock=%d writer=%s peers=%d", nodeID, snap.Value(), snap.Tag().Counter, snap.Tag().Writer, len(peers))
-
-	if len(peers) == 0 {
-		return
-	}
-
-	// Wrap the register in a frame that carries this broadcast span's
-	// trace context. Every receiver extracts it and starts its merge
-	// span as a child, so one write becomes one distributed trace that
-	// fans out to each peer. This mirrors the SWIM envelope.
-	f := frame{State: data}
-	f.Carrier = tracecontext.Inject(ctx)
-
-	payload, err := json.Marshal(f)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return
-	}
-
-	span.SetAttributes(attribute.Int("gossip.message_bytes", len(payload)))
-
-	if err := transport.Broadcast(ctx, peers, payload); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-	}
-}
-
-// crdtPeers resolves the CRDT addresses of every live, non-self member
-// that has advertised one through membership Meta. A member whose Meta
-// has not yet propagated is skipped this round and picked up once SWIM
-// converges.
-func crdtPeers(m membership.Membership, transport gossip.Transport, selfID string) []net.Addr {
-	members := m.Members()
-	addrs := make([]net.Addr, 0, len(members))
-
-	for _, n := range members {
-		if n.ID == selfID || n.State != membership.Alive {
-			continue
-		}
-
-		raw := n.Meta[metaCRDTAddr]
-		if raw == "" {
-			continue
-		}
-
-		addr, err := transport.Resolve(raw)
-		if err != nil {
-			continue
-		}
-
-		addrs = append(addrs, addr)
-	}
-
-	return addrs
-}
-
-// frame is the on-the-wire form of a gossiped register. State holds the
-// marshaled register. Carrier holds the propagated trace context, so a
-// receiver starts its merge span as a child of the sender's broadcast
-// span and one write becomes one distributed trace. This mirrors the
-// SWIM envelope, which carries the same trace context map.
-type frame struct {
-	Carrier map[string]string `json:"carrier,omitempty"`
-	State   []byte            `json:"state"`
 }
 
 func initTracer(ctx context.Context, serviceName, endpoint string) (func(), error) {
