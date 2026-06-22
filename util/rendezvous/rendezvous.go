@@ -11,8 +11,9 @@
 package rendezvous
 
 import (
+	"cmp"
 	"hash/fnv"
-	"sort"
+	"slices"
 )
 
 // Assign returns the node with the highest rendezvous hash score
@@ -54,11 +55,11 @@ func AssignN(nodes []string, key string, n int) []string {
 		scored[i] = scoredNode{node: node, score: score(node, key)}
 	}
 
-	sort.Slice(scored, func(i, j int) bool {
-		if scored[i].score != scored[j].score {
-			return scored[i].score > scored[j].score
+	slices.SortFunc(scored, func(a, b scoredNode) int {
+		if c := cmp.Compare(b.score, a.score); c != 0 {
+			return c
 		}
-		return scored[i].node > scored[j].node
+		return cmp.Compare(b.node, a.node)
 	})
 
 	if n > len(scored) {
