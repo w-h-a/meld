@@ -56,3 +56,8 @@ func (s *memoryStore) Load(ctx context.Context) ([]byte, bool, error) {
 
 	return buf, true, nil
 }
+
+// Close is a no-op that is always safe to call.
+func (s *memoryStore) Close(ctx context.Context) error {
+	return nil
+}

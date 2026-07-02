@@ -24,8 +24,8 @@ jobs:
       - name: Check formatting
         run: make style-check
 
-  unit-test:
-    name: Unit Tests
+  test:
+    name: Tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -36,5 +36,5 @@ jobs:
           go-version: "1.24"
       - name: Install dependencies
         run: go mod tidy
-      - name: Run unit tests
-        run: make unit-test
+      - name: Run tests
+        run: make test
