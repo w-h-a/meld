@@ -84,7 +84,7 @@ func main() {
 	}
 
 	// A second, dedicated UDP transport carries only marshaled register
-	// state. The demo owns its Listen and Stop lifecycle.
+	// state.
 	cg, err := udp.New(gossip.WithBindAddress(crdtBindAddr))
 	if err != nil {
 		log.Fatalf("crdt udp.New: %v", err)
@@ -128,7 +128,7 @@ func main() {
 	<-sig
 	log.Printf("%s leaving", nodeID)
 
-	// Stop the three loops, then leave the cluster and close the CRDT
+	// Stop the loop, then leave the cluster and close the CRDT
 	// transport.
 	cancel()
 
