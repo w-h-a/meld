@@ -5,8 +5,4 @@
 //
 // References:
 //   - Hayashibara et al., "The φ Accrual Failure Detector" (2004)
-//   - Demers et al., "Epidemic Algorithms for Replicated
-//     Database Maintenance" (1987)
-//   - van Renesse et al., "Efficient Reconciliation and Flow
-//     Control for Anti-Entropy Protocols" (2008)
 package phi
