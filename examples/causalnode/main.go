@@ -2,22 +2,27 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/rand/v2"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/w-h-a/meld/antientropy"
-	"github.com/w-h-a/meld/antientropy/basic"
-	"github.com/w-h-a/meld/crdt/pncounter"
+	"github.com/w-h-a/meld/antientropy/causal"
+	"github.com/w-h-a/meld/crdt"
+	"github.com/w-h-a/meld/crdt/orset"
 	"github.com/w-h-a/meld/gossip"
 	"github.com/w-h-a/meld/gossip/udp"
 	"github.com/w-h-a/meld/membership"
 	"github.com/w-h-a/meld/membership/swim"
+	"github.com/w-h-a/meld/store"
+	"github.com/w-h-a/meld/store/sqlite"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -30,9 +35,9 @@ import (
 
 // metaCRDTAddr is the membership Meta key under which a node advertises
 // the address of its dedicated CRDT-state UDP port. SWIM gossips Meta
-// across the cluster, so every node learns where to send PN-Counter
-// state without a second seed list. The membership port and the CRDT
-// port stay decoupled.
+// across the cluster, so every node learns where to send set state
+// without a second seed list. The membership port and the CRDT port
+// stay decoupled.
 const metaCRDTAddr = "crdt_addr"
 
 func main() {
@@ -41,14 +46,17 @@ func main() {
 	crdtBindAddr := envOrFail("CRDT_BIND_ADDR")
 	advertiseAddr := getenv("ADVERTISE_ADDR", nodeID+":7946")
 	crdtAdvertiseAddr := getenv("CRDT_ADVERTISE_ADDR", nodeID+":7947")
+	storePath := getenv("STORE_PATH", nodeID+".db") // causal: durable slot
 	otlpEndpoint := getenv("OTLP_ENDPOINT", "jaeger:4317")
 	peersRaw := os.Getenv("PEERS")
 	probeInterval := durationOr("PROBE_INTERVAL", time.Second)
 	probeTimeout := durationOr("PROBE_TIMEOUT", 300*time.Millisecond)
 	suspicionMult := intOr("SUSPICION_MULT", 4)
-	eventInterval := durationOr("EVENT_INTERVAL", 200*time.Millisecond)
-	decrementProb := floatOr("DECREMENT_PROBABILITY", 0.5)
-	gossipInterval := durationOr("GOSSIP_INTERVAL", 2*time.Second)
+	eventsInterval := durationOr("EVENTS_INTERVAL", time.Second)
+	removeProb := floatOr("REMOVE_PROBABILITY", 0.3)
+	poolSize := intOr("WORKLOAD_POOL_SIZE", 8)
+	gossipInterval := durationOr("GOSSIP_INTERVAL", time.Second)
+	gcInterval := durationOr("GC_INTERVAL", 10*time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -78,27 +86,34 @@ func main() {
 		log.Fatalf("swim.New: %v", err)
 	}
 
-	// A second, dedicated UDP transport carries only marshaled
-	// PN-Counter state.
+	// A second, dedicated UDP transport carries only marshaled set state.
 	cg, err := udp.New(gossip.WithBindAddress(crdtBindAddr))
 	if err != nil {
 		log.Fatalf("crdt udp.New: %v", err)
 	}
 
-	// The Replicator runs Algorithm 1 anti-entropy over the PN-Counter:
-	// it owns the gossip-and-merge loop.
-	r, err := basic.New(
-		antientropy.WithInitial(pncounter.New()),
-		antientropy.WithCodec(encodeCounter, decodeCounter),
-		antientropy.WithPeerAddress[pncounter.PNCounter](crdtPeerAddress),
+	// causal: durable store. The causal node persists (seq, state) on every
+	// transition and reloads it on restart.
+	st, err := sqlite.New(store.WithLocation(storePath))
+	if err != nil {
+		log.Fatalf("sqlite.New: %v", err)
+	}
+
+	// The Replicator runs Algorithm 2 (causal) anti-entropy over the ORSet.
+	r, err := causal.New(
+		antientropy.WithInitial(orset.New[string]()),
+		antientropy.WithCodec(encodeSet, decodeSet),
+		antientropy.WithPeerAddress[orset.ORSet[string]](crdtPeerAddress),
 		antientropy.WithOnReceive(onReceive(nodeID)),
 		antientropy.WithOnSend(onSend(nodeID)),
-		antientropy.WithTransport[pncounter.PNCounter](cg),
-		antientropy.WithMembership[pncounter.PNCounter](m),
-		antientropy.WithInterval[pncounter.PNCounter](gossipInterval),
+		antientropy.WithTransport[orset.ORSet[string]](cg),
+		antientropy.WithMembership[orset.ORSet[string]](m),
+		antientropy.WithStore[orset.ORSet[string]](st),
+		antientropy.WithInterval[orset.ORSet[string]](gossipInterval),
+		causal.WithGCInterval[orset.ORSet[string]](gcInterval),
 	)
 	if err != nil {
-		log.Fatalf("basic.New: %v", err)
+		log.Fatalf("causal.New: %v", err)
 	}
 
 	// Start opens the CRDT transport's listener and the gossip loops.
@@ -115,17 +130,17 @@ func main() {
 	if err := m.Join(ctx, seeds); err != nil {
 		log.Fatalf("Join: %v", err)
 	}
-	log.Printf("%s joined; bind=%s advertise=%s crdt=%s seeds=%v", nodeID, bindAddr, advertiseAddr, crdtAdvertiseAddr, seeds)
+	log.Printf("%s joined; bind=%s advertise=%s crdt=%s store=%s seeds=%v", nodeID, bindAddr, advertiseAddr, crdtAdvertiseAddr, storePath, seeds)
 
-	go eventLoop(ctx, nodeID, eventInterval, decrementProb, r)
+	go eventLoop(ctx, nodeID, eventsInterval, removeProb, poolSize, r)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	<-sig
 	log.Printf("%s leaving", nodeID)
 
-	// Stop the loop, then leave the cluster and close the
-	// CRDT transport.
+	// Stop the loop, then leave the cluster, then close the CRDT
+	// transport, and, finally, close the store.
 	cancel()
 
 	leaveCtx, leaveCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -139,18 +154,21 @@ func main() {
 	if err := cg.Stop(leaveCtx); err != nil {
 		log.Printf("crdt Stop: %v", err)
 	}
+	if err := st.Close(leaveCtx); err != nil {
+		log.Printf("store Close: %v", err)
+	}
 }
 
-// encodeCounter and decodeCounter adapt the PN-Counter's own
-// marshaling to the antientropy codec the Replicator ships state with.
-func encodeCounter(c pncounter.PNCounter) ([]byte, error) {
-	return c.Marshal()
+// encodeSet and decodeSet adapt the OR-Set's own marshaling to the
+// antientropy codec the Replicator ships state with.
+func encodeSet(s orset.ORSet[string]) ([]byte, error) {
+	return s.Marshal(crdt.StringEncode)
 }
 
-func decodeCounter(b []byte) (pncounter.PNCounter, error) {
-	var c pncounter.PNCounter
-	err := c.Unmarshal(b)
-	return c, err
+func decodeSet(b []byte) (orset.ORSet[string], error) {
+	var s orset.ORSet[string]
+	err := s.Unmarshal(b, crdt.StringDecode)
+	return s, err
 }
 
 // crdtPeerAddress resolves a member's CRDT-state address from the
@@ -160,40 +178,86 @@ func crdtPeerAddress(n membership.Node) (string, bool) {
 	return addr, addr != ""
 }
 
-// onReceive enriches the Replicator's receive span with the converged
-// PN-Counter reading after each merge.
-func onReceive(nodeID string) antientropy.OnReceive[pncounter.PNCounter] {
-	return func(ctx context.Context, before, _, after pncounter.PNCounter) {
+// onReceive enriches the receive span with what the merge changed and the
+// converged size.
+func onReceive(nodeID string) antientropy.OnReceive[orset.ORSet[string]] {
+	return func(ctx context.Context, before, _, after orset.ORSet[string]) {
+		added, removed := elementDelta(before.Elements(), after.Elements())
+		changed := len(added) > 0 || len(removed) > 0
+
+		span := trace.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("crdt.node_id", nodeID),
+			attribute.Int("crdt.element_count", len(after.Elements())),
+			attribute.Int("crdt.live_triple_count", after.LiveCount()),
+			attribute.Bool("crdt.elements_changed", changed),
+		)
+
+		if len(added) > 0 {
+			span.SetAttributes(attribute.String("crdt.elements_added", strings.Join(added, ",")))
+		}
+		if len(removed) > 0 {
+			span.SetAttributes(attribute.String("crdt.elements_removed", strings.Join(removed, ",")))
+		}
+
+		if !changed {
+			return
+		}
+
+		log.Printf("%s merged: added=[%s] removed=[%s] elements=%d",
+			nodeID, strings.Join(added, ","), strings.Join(removed, ","), len(after.Elements()))
+	}
+}
+
+// elementDelta returns the elements gained and lost between two snapshots.
+func elementDelta(before, after []string) (added, removed []string) {
+	beforeSet := make(map[string]struct{}, len(before))
+	for _, e := range before {
+		beforeSet[e] = struct{}{}
+	}
+
+	afterSet := make(map[string]struct{}, len(after))
+	for _, e := range after {
+		afterSet[e] = struct{}{}
+	}
+
+	for e := range afterSet {
+		if _, ok := beforeSet[e]; !ok {
+			added = append(added, e)
+		}
+	}
+
+	for e := range beforeSet {
+		if _, ok := afterSet[e]; !ok {
+			removed = append(removed, e)
+		}
+	}
+
+	sort.Strings(added)
+	sort.Strings(removed)
+
+	return added, removed
+}
+
+// onSend enriches the gossip span with the set this node is shipping.
+func onSend(nodeID string) antientropy.OnSend[orset.ORSet[string]] {
+	return func(ctx context.Context, state orset.ORSet[string]) {
 		trace.SpanFromContext(ctx).SetAttributes(
 			attribute.String("crdt.node_id", nodeID),
-			attribute.Int64("crdt.value", after.Value()),
-			attribute.Int64("crdt.p_sum", int64(after.Increments())),
-			attribute.Int64("crdt.n_sum", int64(after.Decrements())),
+			attribute.Int("crdt.element_count", len(state.Elements())),
+			attribute.Int("crdt.live_triple_count", state.LiveCount()),
 		)
 	}
 }
 
-// onSend enriches the Replicator's gossip span with the local reading
-// shipped this round.
-func onSend(nodeID string) antientropy.OnSend[pncounter.PNCounter] {
-	return func(ctx context.Context, state pncounter.PNCounter) {
-		trace.SpanFromContext(ctx).SetAttributes(
-			attribute.String("crdt.node_id", nodeID),
-			attribute.Int64("crdt.value", state.Value()),
-			attribute.Int64("crdt.p_sum", int64(state.Increments())),
-			attribute.Int64("crdt.n_sum", int64(state.Decrements())),
-		)
-		log.Printf("%s value=%d p=%d n=%d", nodeID, state.Value(), state.Increments(), state.Decrements())
-	}
-}
-
-// eventLoop simulates a fluctuating pool of open conns.
+// eventLoop simulates a fluctuating set of scheduled workloads.
 func eventLoop(
 	ctx context.Context,
 	nodeID string,
 	interval time.Duration,
-	decrementProb float64,
-	r antientropy.Replicator[pncounter.PNCounter],
+	removeProb float64,
+	poolSize int,
+	r antientropy.Replicator[orset.ORSet[string]],
 ) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -203,11 +267,12 @@ func eventLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if rand.Float64() < decrementProb {
-				r.Submit(r.State().DecrementDelta(nodeID))
+			id := fmt.Sprintf("workload-%d", rand.IntN(poolSize))
+			if rand.Float64() < removeProb {
+				r.Submit(r.State().RemoveDelta(id))
 				continue
 			}
-			r.Submit(r.State().IncrementDelta(nodeID))
+			r.Submit(r.State().AddDelta(nodeID, id))
 		}
 	}
 }
