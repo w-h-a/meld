@@ -111,6 +111,16 @@ func TestBasic_GCounter_ConvergesUnderLossAndReorder(t *testing.T) {
 	}
 }
 
+func encodeGCounter(g gcounter.GCounter) ([]byte, error) {
+	return g.Marshal()
+}
+
+func decodeGCounter(b []byte) (gcounter.GCounter, error) {
+	var g gcounter.GCounter
+	err := g.Unmarshal(b)
+	return g, err
+}
+
 func TestBasic_LWWRegister_NodesConverge(t *testing.T) {
 	// arrange
 	net := memory.NewNetwork()
@@ -156,16 +166,6 @@ func TestBasic_LWWRegister_NodesConverge(t *testing.T) {
 			return n.State().Value() == "c"
 		}, time.Second, 10*time.Millisecond)
 	}
-}
-
-func encodeGCounter(g gcounter.GCounter) ([]byte, error) {
-	return g.Marshal()
-}
-
-func decodeGCounter(b []byte) (gcounter.GCounter, error) {
-	var g gcounter.GCounter
-	err := g.Unmarshal(b)
-	return g, err
 }
 
 func encodeLWWRegister(lww lwwregister.LWWRegister[string]) ([]byte, error) {
