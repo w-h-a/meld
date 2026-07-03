@@ -18,25 +18,28 @@ type nodeState struct {
 	Incarnation uint64
 }
 
-// apply merges an incoming view of a node into the local view.
-// Rules, in priority order:
-//  1. Leaving the cluster is a permanent goodbye.
-//     A node enters this Left state only by calling Leave on itself.
-//     That call is authoritative.
-//     - If we have already recorded a node as having left, that view
-//     is permanent. Any later message about that node is ignored.
-//     - If an incoming message says a node has left, we accept
-//     that even at a lower incarnation than we currently have. We
-//     record the higher of the two incarnations.
-//  2. Higher incarnation wins.
-//  3. Failed > Suspect > Alive.
+// apply merges an incoming view of a node into the local view, checking the
+// cases below in order. It returns the merged state and whether anything
+// changed.
 //
-// Returns the merged state and whether anything observable has changed.
+//  1. Suppose we hold the node as Left. No matter the incoming state, if the
+//     incoming incarnation is higher than the one we hold, we reclaim it; else,
+//     we ignore it.
+//  2. Suppose the incoming view says the node is Left. Leave is authoritative
+//     so we take it even at a lower incarnation, but record the nodeState with
+//     the higher incarnation.
+//  3. Higher incarnation wins.
+//  4. At equal incarnation, Failed > Suspect > Alive.
 func apply(local, incoming nodeState) (nodeState, bool) {
+	// 1.
 	if local.State == membership.Left {
+		if incoming.Incarnation > local.Incarnation {
+			return incoming, true
+		}
 		return local, false
 	}
 
+	// 2.
 	if incoming.State == membership.Left {
 		if local.Incarnation > incoming.Incarnation {
 			next := local
@@ -46,14 +49,15 @@ func apply(local, incoming nodeState) (nodeState, bool) {
 		return incoming, true
 	}
 
+	// 3.
 	if incoming.Incarnation < local.Incarnation {
 		return local, false
 	}
-
 	if incoming.Incarnation > local.Incarnation {
 		return incoming, true
 	}
 
+	// 4.
 	if precedence(incoming.State) <= precedence(local.State) {
 		return local, false
 	}

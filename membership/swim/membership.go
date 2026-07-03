@@ -118,7 +118,7 @@ func (m *swimMembership) Join(ctx context.Context, existing []string) error {
 	}
 
 	m.localIncMtx.Lock()
-	m.localInc = 1
+	m.localInc = uint64(time.Now().UnixNano())
 	inc := m.localInc
 	m.localIncMtx.Unlock()
 

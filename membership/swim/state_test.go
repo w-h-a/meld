@@ -7,10 +7,79 @@ import (
 	"github.com/w-h-a/meld/membership"
 )
 
-func TestApply_LeftIsTerminalLocally(t *testing.T) {
+func TestApply_LeftReclaimedByHigherIncarnationAlive(t *testing.T) {
+	// arrange
+	local := nodeState{
+		ID:          "n1",
+		Address:     "10.0.0.1:7946",
+		Meta:        map[string]string{"role": "old"},
+		State:       membership.Left,
+		Incarnation: 5,
+	}
+	incoming := nodeState{
+		ID:          "n1",
+		Address:     "10.0.0.1:9999",
+		Meta:        map[string]string{"role": "new"},
+		State:       membership.Alive,
+		Incarnation: 6,
+	}
+
+	// act
+	next, changed := apply(local, incoming)
+
+	// assert
+	require.True(t, changed)
+	require.Equal(t, membership.Alive, next.State)
+	require.Equal(t, uint64(6), next.Incarnation)
+	require.Equal(t, "10.0.0.1:9999", next.Address)
+	require.Equal(t, "new", next.Meta["role"])
+}
+
+func TestApply_LeftReclaimedByHigherIncarnationSuspect(t *testing.T) {
+	// arrange
+	local := nodeState{
+		ID:          "n1",
+		Address:     "10.0.0.1:7946",
+		Meta:        map[string]string{"role": "old"},
+		State:       membership.Left,
+		Incarnation: 5,
+	}
+	incoming := nodeState{
+		ID:          "n1",
+		Address:     "10.0.0.1:9999",
+		Meta:        map[string]string{"role": "new"},
+		State:       membership.Suspect,
+		Incarnation: 6,
+	}
+
+	// act
+	next, changed := apply(local, incoming)
+
+	// assert
+	require.True(t, changed)
+	require.Equal(t, membership.Suspect, next.State)
+	require.Equal(t, uint64(6), next.Incarnation)
+	require.Equal(t, "10.0.0.1:9999", next.Address)
+	require.Equal(t, "new", next.Meta["role"])
+}
+
+func TestApply_LeftNotReclaimedAtEqualIncarnation(t *testing.T) {
 	// arrange
 	local := nodeState{ID: "n1", State: membership.Left, Incarnation: 5}
-	incoming := nodeState{ID: "n1", State: membership.Alive, Incarnation: 100}
+	incoming := nodeState{ID: "n1", State: membership.Alive, Incarnation: 5}
+
+	// act
+	next, changed := apply(local, incoming)
+
+	// assert
+	require.False(t, changed)
+	require.Equal(t, membership.Left, next.State)
+}
+
+func TestApply_LeftNotReclaimedAtLowerIncarnation(t *testing.T) {
+	// arrange
+	local := nodeState{ID: "n1", State: membership.Left, Incarnation: 5}
+	incoming := nodeState{ID: "n1", State: membership.Alive, Incarnation: 4}
 
 	// act
 	next, changed := apply(local, incoming)
