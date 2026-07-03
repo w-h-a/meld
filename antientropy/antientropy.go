@@ -1,5 +1,8 @@
 // Package antientropy replicates CRDTs toward convergence by gossiping
 // deltas. It drives crdt.Mergeables through a gossip transport and a membership source.
+//
+// References:
+//   - Almeida, Shoker, Baquero, "Delta State Replicated Data Types" (2016)
 package antientropy
 
 import (
