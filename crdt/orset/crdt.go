@@ -3,6 +3,7 @@
 // References:
 //   - Shapiro et al., "A comprehensive study of Convergent and
 //     Commutative Replicated Data Types" (2011)
+//   - Bieniusa et al., "An Optimized Conflict-free Replicated Set" (2012)
 package orset
 
 import (
