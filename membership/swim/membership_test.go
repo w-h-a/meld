@@ -231,6 +231,46 @@ func TestRecovery_RefutesSuspect(t *testing.T) {
 	)
 }
 
+func TestRejoin_AfterLeaveReclaimsIdentity(t *testing.T) {
+	// arrange
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	n0, g0 := newNode(t, "n0", nil)
+	defer func() { _ = n0.Leave(ctx) }()
+	n0Addr := g0.Addr(ctx).String()
+
+	n1a, _ := newNode(t, "n1", []string{n0Addr})
+
+	require.Eventually(t,
+		allAliveAt([]membership.Membership{n0, n1a}, 2),
+		2*time.Second, 20*time.Millisecond,
+		"cluster did not converge",
+	)
+
+	// act: n1 gracefully leaves, and n0 records it Left.
+	require.NoError(t, n1a.Leave(ctx))
+
+	require.Eventually(t, func() bool {
+		for _, m := range n0.Members() {
+			if m.ID == "n1" && m.State == membership.Left {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 20*time.Millisecond, "n0 never recorded n1 as Left")
+
+	n1b, _ := newNode(t, "n1", []string{n0Addr})
+	defer func() { _ = n1b.Leave(ctx) }()
+
+	// assert: n0 reclaims the returned n1 and both re-converge to 2 Alive.
+	require.Eventually(t,
+		allAliveAt([]membership.Membership{n0, n1b}, 2),
+		3*time.Second, 20*time.Millisecond,
+		"n0 did not reclaim the returned n1 to Alive",
+	)
+}
+
 func newNode(t *testing.T, id string, peers []string) (membership.Membership, gossip.Gossip) {
 	t.Helper()
 
