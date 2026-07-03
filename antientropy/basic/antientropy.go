@@ -79,7 +79,7 @@ func (r *basicReplicator[T]) State() T {
 	return r.state
 }
 
-// Start opens the transport listener and launches the receive and gossip
+// Start opens the transport listener and launches the receive and send
 // loops.
 func (r *basicReplicator[T]) Start(ctx context.Context) error {
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -144,12 +144,12 @@ func (r *basicReplicator[T]) receiveLoop(ctx context.Context, ch <-chan *gossip.
 // receive decodes one gossip.Packet and merges the payload into the
 // state.
 func (r *basicReplicator[T]) receive(pkt *gossip.Packet) {
-	e, err := decode(pkt.Data)
+	e, err := decodeEnvelope(pkt.Data)
 	if err != nil {
 		_, span := r.tracer.Start(context.Background(), "antientropy.receive", trace.WithAttributes(
 			attribute.String("gossip.sender_address", pkt.From.String()),
 		))
-		span.AddEvent("antientropy.from_decode_error", trace.WithAttributes(
+		span.AddEvent("antientropy.envelope_decode_error", trace.WithAttributes(
 			attribute.String("error.message", err.Error()),
 		))
 		span.End()
@@ -160,6 +160,7 @@ func (r *basicReplicator[T]) receive(pkt *gossip.Packet) {
 		tracecontext.Extract(context.Background(), e.Carrier),
 		"antientropy.receive",
 		trace.WithAttributes(
+			attribute.String("antientropy.algorithm", "basic"),
 			attribute.String("gossip.sender_address", pkt.From.String()),
 			attribute.Int("gossip.message_bytes", len(pkt.Data)),
 		),
@@ -206,12 +207,14 @@ func (r *basicReplicator[T]) sendLoop(ctx context.Context) {
 // send ships one gossip round: the delta-group if this round buffered
 // anything; otherwise, the full state.
 func (r *basicReplicator[T]) send() {
+	peers := r.peers()
+	if len(peers) == 0 {
+		return
+	}
+
 	r.mtx.Lock()
 	state := r.state
-	payload, full := state, true
-	if r.buffered {
-		payload, full = r.deltas, false
-	}
+	payload, full := r.deltaOrFull()
 	var empty T
 	r.deltas = empty
 	r.buffered = false
@@ -221,8 +224,6 @@ func (r *basicReplicator[T]) send() {
 	if !full {
 		shipped = "delta"
 	}
-
-	peers := r.peers()
 
 	ctx, span := r.tracer.Start(context.Background(), "antientropy.gossip", trace.WithAttributes(
 		attribute.String("antientropy.algorithm", "basic"),
@@ -235,10 +236,6 @@ func (r *basicReplicator[T]) send() {
 		r.options.OnSend(ctx, state)
 	}
 
-	if len(peers) == 0 {
-		return
-	}
-
 	data, err := r.options.Encoder(payload)
 	if err != nil {
 		span.RecordError(err)
@@ -246,9 +243,12 @@ func (r *basicReplicator[T]) send() {
 		return
 	}
 
-	e := envelope{Payload: data, Carrier: tracecontext.Inject(ctx)}
+	e := envelope{
+		Payload: data,
+		Carrier: tracecontext.Inject(ctx),
+	}
 
-	msg, err := encode(e)
+	msg, err := encodeEnvelope(e)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -268,7 +268,8 @@ func (r *basicReplicator[T]) send() {
 func (r *basicReplicator[T]) peers() []net.Addr {
 	self := r.options.Membership.LocalNode().ID
 	members := r.options.Membership.Members()
-	addrs := make([]net.Addr, 0, len(members))
+
+	out := make([]net.Addr, 0, len(members))
 
 	for _, m := range members {
 		if m.ID == self || m.State != membership.Alive {
@@ -285,8 +286,16 @@ func (r *basicReplicator[T]) peers() []net.Addr {
 			continue
 		}
 
-		addrs = append(addrs, addr)
+		out = append(out, addr)
 	}
 
-	return addrs
+	return out
+}
+
+func (r *basicReplicator[T]) deltaOrFull() (T, bool) {
+	if !r.buffered {
+		return r.state, true
+	}
+
+	return r.deltas, false
 }

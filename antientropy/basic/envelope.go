@@ -11,11 +11,11 @@ type envelope struct {
 	Carrier map[string]string `json:"carrier,omitempty"`
 }
 
-func encode(e envelope) ([]byte, error) {
+func encodeEnvelope(e envelope) ([]byte, error) {
 	return json.Marshal(e)
 }
 
-func decode(b []byte) (envelope, error) {
+func decodeEnvelope(b []byte) (envelope, error) {
 	var e envelope
 	err := json.Unmarshal(b, &e)
 	return e, err
