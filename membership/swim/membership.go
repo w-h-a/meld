@@ -104,7 +104,7 @@ func New(opts ...membership.Option) (membership.Membership, error) {
 }
 
 // Join announces self to seed peers, starts the receiver and
-// prober goroutines, and seeds the local members map with self.
+// prober routines, and seeds the local members map with self.
 // Calling Join more than once returns an error.
 func (m *swimMembership) Join(ctx context.Context, existing []string) error {
 	if !m.started.CompareAndSwap(false, true) {
@@ -574,13 +574,6 @@ func (m *swimMembership) sendEnvelope(ctx context.Context, addr net.Addr, e enve
 	}
 }
 
-// selfView returns the current self entry from the members map.
-func (m *swimMembership) selfView() nodeState {
-	m.memberMtx.RLock()
-	defer m.memberMtx.RUnlock()
-	return m.members[m.localID]
-}
-
 // registerPending records a buffered channel for a probe's
 // awaited ack ctx and returns it.
 func (m *swimMembership) registerPending(seq uint64) chan context.Context {
@@ -642,7 +635,7 @@ func (m *swimMembership) mergeAndEmit(ctx context.Context, reporter string, inco
 	}
 
 	m.emit(membership.Event{
-		Type: deriveEventType(wasPresent, local.State, next.State),
+		Type: membership.DeriveEventType(wasPresent, local.State, next.State),
 		Node: toNode(next),
 	})
 }
@@ -798,6 +791,13 @@ func (m *swimMembership) emit(ev membership.Event) {
 	}
 }
 
+// selfView returns the current self entry from the members map.
+func (m *swimMembership) selfView() nodeState {
+	m.memberMtx.RLock()
+	defer m.memberMtx.RUnlock()
+	return m.members[m.localID]
+}
+
 // Leave bumps self incarnation, transitions self to Left, broadcasts
 // the Left state to currently Alive peers, and shuts down the adapter.
 // Subsequent calls are no-ops.
@@ -888,12 +888,7 @@ func (m *swimMembership) Watch() (<-chan membership.Event, error) {
 }
 
 // snapshotLivePeersLocked returns members in the Alive state,
-// excluding self. The result is the dissemination target set for
-// Leave broadcasts and self-refutation. Failed/Left peers are
-// already gone; Suspect peers have evidence of unreachability.
-// Transitive piggybacking on subsequent probe rounds delivers
-// state to those nodes when they actually return.
-// Must be called with memberMtx held.
+// excluding self. Must be called with memberMtx held.
 func (m *swimMembership) snapshotLivePeersLocked() []*nodeState {
 	out := make([]*nodeState, 0, len(m.members))
 	for _, n := range m.members {
@@ -942,24 +937,4 @@ func toNode(n nodeState) membership.Node {
 		Meta:    n.Meta,
 		State:   n.State,
 	}
-}
-
-// deriveEventType maps a state transition to the corresponding
-// EventType. A first-time-seen node is always Join regardless of
-// the incoming state.
-func deriveEventType(wasPresent bool, oldState, newState membership.State) membership.EventType {
-	if !wasPresent {
-		return membership.Join
-	}
-	switch newState {
-	case membership.Left:
-		if oldState != membership.Left {
-			return membership.Leave
-		}
-	case membership.Failed:
-		if oldState != membership.Failed {
-			return membership.Fail
-		}
-	}
-	return membership.Update
 }
