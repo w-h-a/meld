@@ -3,7 +3,17 @@ package phi
 import (
 	"math"
 	"time"
+
+	"github.com/w-h-a/meld/membership"
 )
+
+// nodeState is a peer's self-view as it rides on a heartbeat.
+type nodeState struct {
+	ID      string
+	Address string
+	Meta    map[string]string
+	State   membership.State
+}
 
 // phiState is how the detector currently regards a peer.
 type phiState string
