@@ -188,6 +188,7 @@ func (m *swimMembership) handlePacket(pkt *gossip.Packet) {
 		attribute.String("swim.node_id", m.localID),
 		attribute.Int("swim.message_type", int(e.Type)),
 		attribute.String("swim.sender", e.From.ID),
+		attribute.Int64("swim.sender_seq", int64(e.SeqNo)),
 	))
 	defer span.End()
 
@@ -229,7 +230,7 @@ func (m *swimMembership) disseminateSelfOriginated(ctx context.Context, learned 
 	self := m.selfView()
 
 	m.memberMtx.RLock()
-	peers := m.snapshotLivePeersLocked()
+	peers := m.snapshotOfPeers()
 	m.memberMtx.RUnlock()
 
 	addrs := make([]net.Addr, 0, len(peers))
@@ -526,7 +527,7 @@ func (m *swimMembership) markSuspect(ctx context.Context, target nodeState) {
 	self := m.selfView()
 
 	m.memberMtx.RLock()
-	peers := m.snapshotLivePeersLocked()
+	peers := m.snapshotOfPeers()
 	m.memberMtx.RUnlock()
 
 	addrs := make([]net.Addr, 0, len(peers)+1)
@@ -547,31 +548,6 @@ func (m *swimMembership) markSuspect(ctx context.Context, target nodeState) {
 		From:   self,
 		Target: target,
 	})
-}
-
-// sendEnvelope injects the active trace context into the carrier,
-// encodes, and sends. Encode failures are caller input (bad
-// envelope construction) so the span is bare. SendTo failures
-// are runtime faults and mark the span error.
-func (m *swimMembership) sendEnvelope(ctx context.Context, addr net.Addr, e envelope) {
-	e.Carrier = tracecontext.Inject(ctx)
-
-	data, err := encode(e)
-	if err != nil {
-		_, span := m.tracer.Start(ctx, "swim.send")
-		span.AddEvent("swim.encode_error", trace.WithAttributes(
-			attribute.String("error.message", err.Error()),
-		))
-		span.End()
-		return
-	}
-
-	if err := m.transport.SendTo(ctx, addr, data); err != nil {
-		_, span := m.tracer.Start(ctx, "swim.send")
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		span.End()
-	}
 }
 
 // registerPending records a buffered channel for a probe's
@@ -664,7 +640,7 @@ func (m *swimMembership) refuteSelf(ctx context.Context, observedInc uint64) {
 
 	m.memberMtx.Lock()
 	m.members[m.localID] = refuted
-	peers := m.snapshotLivePeersLocked()
+	peers := m.snapshotOfPeers()
 	m.memberMtx.Unlock()
 
 	m.cancelSuspectTimer(m.localID)
@@ -752,7 +728,7 @@ func (m *swimMembership) expireSuspect(ctx context.Context, id string, expectedI
 	self := m.selfView()
 
 	m.memberMtx.RLock()
-	peers := m.snapshotLivePeersLocked()
+	peers := m.snapshotOfPeers()
 	m.memberMtx.RUnlock()
 
 	addrs := make([]net.Addr, 0, len(peers)+1)
@@ -821,7 +797,7 @@ func (m *swimMembership) Leave(ctx context.Context) error {
 
 	m.memberMtx.Lock()
 	m.members[m.localID] = leftSelf
-	peers := m.snapshotLivePeersLocked()
+	peers := m.snapshotOfPeers()
 	m.memberMtx.Unlock()
 
 	addrs := make([]net.Addr, 0, len(peers))
@@ -887,9 +863,9 @@ func (m *swimMembership) Watch() (<-chan membership.Event, error) {
 	return m.eventCh, nil
 }
 
-// snapshotLivePeersLocked returns members in the Alive state,
+// snapshotOfPeers returns members in the Alive state,
 // excluding self. Must be called with memberMtx held.
-func (m *swimMembership) snapshotLivePeersLocked() []*nodeState {
+func (m *swimMembership) snapshotOfPeers() []*nodeState {
 	out := make([]*nodeState, 0, len(m.members))
 	for _, n := range m.members {
 		if n.ID == m.localID {
@@ -902,6 +878,31 @@ func (m *swimMembership) snapshotLivePeersLocked() []*nodeState {
 		out = append(out, &nodeCopy)
 	}
 	return out
+}
+
+// sendEnvelope injects the active trace context into the carrier,
+// encodes, and sends. Encode failures are caller input (bad
+// envelope construction) so the span is bare. SendTo failures
+// are runtime faults and mark the span error.
+func (m *swimMembership) sendEnvelope(ctx context.Context, addr net.Addr, e envelope) {
+	e.Carrier = tracecontext.Inject(ctx)
+
+	data, err := encode(e)
+	if err != nil {
+		_, span := m.tracer.Start(ctx, "swim.send")
+		span.AddEvent("swim.encode_error", trace.WithAttributes(
+			attribute.String("error.message", err.Error()),
+		))
+		span.End()
+		return
+	}
+
+	if err := m.transport.SendTo(ctx, addr, data); err != nil {
+		_, span := m.tracer.Start(ctx, "swim.send")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		span.End()
+	}
 }
 
 // broadcastEnvelope injects the active trace context, encodes

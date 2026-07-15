@@ -7,6 +7,24 @@ import (
 	"github.com/w-h-a/meld/membership"
 )
 
+// peerEntry is our local, mutable view of one peer we are monitoring.
+type peerEntry struct {
+	Address     string
+	Meta        map[string]string
+	State       membership.State
+	lastArrival time.Time
+	window      *sampleWindow
+	suspectedAt time.Time
+	failedAt    time.Time
+}
+
+// peerChange is a peer whose state changed during a check round.
+type peerChange struct {
+	from membership.State
+	node membership.Node
+	phi  float64
+}
+
 // nodeState is a peer's self-view as it rides on a heartbeat.
 type nodeState struct {
 	ID      string
@@ -15,33 +33,56 @@ type nodeState struct {
 	State   membership.State
 }
 
-// phiState is how the detector currently regards a peer.
-type phiState string
-
-const (
-	trust   phiState = "trust"
-	suspect phiState = "suspect"
-)
-
-// nextState decides whether we trust or suspect a peer, given its current
-// phi and two thresholds.
+// nextOnHeartbeat decides a peer's next state when a heartbeat arrives from
+// it. A heartbeat is direct evidence the peer is alive, so a peer we had
+// written off comes back. It returns the next state and whether the peer was
+// reclaimed/
 //
-// If the peer is currently suspected, we change it to trust once phi
-// is low enough; else, we keep it at suspected.
-// Otherwise, the peer is trusted, and we change it to suspect once phi
-// is high enough; else, we keep it at trust.
-func nextState(cur phiState, phi, low, high float64) phiState {
-	if cur == suspect {
-		if phi <= low {
-			return trust
+//  1. A Failed or Left peer is reclaimed to Alive.
+//  2. Any other state is left unchanged.
+func nextOnHeartbeat(cur membership.State) (membership.State, bool) {
+	// 1.
+	if cur == membership.Failed || cur == membership.Left {
+		return membership.Alive, true
+	}
+	// 2.
+	return cur, false
+}
+
+// nextOnTick decides a peer's next state during a checker round, given its
+// current state, its phi score, the low and high thresholds, and whether the
+// suspect and reap dwells have elapsed. It returns the next state and whether
+// the peer should be reaped.
+//
+//  1. An Alive peer flips to Suspect once phi reaches the high threshold.
+//  2. A Suspect peer recovers to Alive once phi falls to the low threshold.
+//  3. A Suspect peer is Failed once it has been Suspect past the dwell with
+//     phi still at or above high.
+//  4. A Failed peer is reaped once it has been Failed past the reap dwell.
+func nextOnTick(cur membership.State, phi, low, high float64, dwellElasped, reapElapsed bool) (membership.State, bool) {
+	switch cur {
+	case membership.Alive:
+		// 1.
+		if phi >= high {
+			return membership.Suspect, false
 		}
-		return suspect
+	case membership.Suspect:
+		// 2.
+		if phi <= low {
+			return membership.Alive, false
+		}
+		// 3.
+		if dwellElasped && phi >= high {
+			return membership.Failed, false
+		}
+	case membership.Failed:
+		// 4.
+		if reapElapsed {
+			return cur, true
+		}
 	}
 
-	if phi >= high {
-		return suspect
-	}
-	return trust
+	return cur, false
 }
 
 // phiFromWindow returns phi, a suspicion score for one peer. The higher

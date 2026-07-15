@@ -10,10 +10,12 @@ import (
 type (
 	heartbeatIntervalKey        struct{}
 	windowSizeKey               struct{}
-	phiThresholdKey             struct{}
+	phiLowThresholdKey          struct{}
+	phiHighThresholdKey         struct{}
 	minStdDevKey                struct{}
 	acceptableHeartbeatPauseKey struct{}
 	suspectDwellKey             struct{}
+	reapDwellKey                struct{}
 )
 
 // WithHeartbeatInterval sets how often this node emits a heartbeat.
@@ -45,15 +47,29 @@ func windowSizeFrom(ctx context.Context) int {
 	return 1000
 }
 
-// WithPhiThreshold sets the phi value at or above which a peer is suspected.
-func WithPhiThreshold(f float64) membership.Option {
+// WithPhiLowThreshold sets the phi value at or below which a peer is trusted.
+func WithPhiLowThreshold(f float64) membership.Option {
 	return func(o *membership.Options) {
-		o.Context = context.WithValue(o.Context, phiThresholdKey{}, f)
+		o.Context = context.WithValue(o.Context, phiLowThresholdKey{}, f)
 	}
 }
 
-func phiThresholdFrom(ctx context.Context) float64 {
-	if v, ok := ctx.Value(phiThresholdKey{}).(float64); ok {
+func phiLowThresholdFrom(ctx context.Context) float64 {
+	if v, ok := ctx.Value(phiLowThresholdKey{}).(float64); ok {
+		return v
+	}
+	return 1.0
+}
+
+// WithPhiHighThreshold sets the phi value at or above which a peer is suspected.
+func WithPhiHighThreshold(f float64) membership.Option {
+	return func(o *membership.Options) {
+		o.Context = context.WithValue(o.Context, phiHighThresholdKey{}, f)
+	}
+}
+
+func phiHighThresholdFrom(ctx context.Context) float64 {
+	if v, ok := ctx.Value(phiHighThresholdKey{}).(float64); ok {
 		return v
 	}
 	return 8.0
@@ -102,4 +118,19 @@ func suspectDwellFrom(ctx context.Context) time.Duration {
 		return v
 	}
 	return 0
+}
+
+// WithReapDwell sets how long a peer stays Failed before the checker forgets
+// it.
+func WithReapDwell(d time.Duration) membership.Option {
+	return func(o *membership.Options) {
+		o.Context = context.WithValue(o.Context, reapDwellKey{}, d)
+	}
+}
+
+func reapDwellFrom(ctx context.Context) time.Duration {
+	if v, ok := ctx.Value(reapDwellKey{}).(time.Duration); ok {
+		return v
+	}
+	return 30 * time.Second
 }
