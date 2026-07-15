@@ -6,34 +6,163 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/w-h-a/meld/membership"
 )
 
-func TestNextState(t *testing.T) {
+func TestNextOnHeartbeat_FailedReclaimed(t *testing.T) {
 	// arrange
-	const low = 1.0
-	const high = 8.0
+	cur := membership.Failed
 
-	cases := []struct {
-		name string
-		cur  phiState
-		phi  float64
-		want phiState
-	}{
-		{"trust holds below high", trust, 5, trust},
-		{"trust flips to suspect at high", trust, 8, suspect},
-		{"suspect holds above low", suspect, 5, suspect},
-		{"suspect flips to trust at low", suspect, 1, trust},
-	}
+	// act
+	next, reclaimed := nextOnHeartbeat(cur)
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			// act
-			got := nextState(c.cur, c.phi, low, high)
+	// assert
+	require.Equal(t, membership.Alive, next)
+	require.True(t, reclaimed)
+}
 
-			// assert
-			require.Equal(t, c.want, got)
-		})
-	}
+func TestNextOnHeartbeat_LeftReclaimed(t *testing.T) {
+	// arrange
+	cur := membership.Left
+
+	// act
+	next, reclaimed := nextOnHeartbeat(cur)
+
+	// assert
+	require.Equal(t, membership.Alive, next)
+	require.True(t, reclaimed)
+}
+
+func TestNextOnHeartbeat_AliveUnchanged(t *testing.T) {
+	// arrange
+	cur := membership.Alive
+
+	// act
+	next, reclaimed := nextOnHeartbeat(cur)
+
+	// assert
+	require.Equal(t, membership.Alive, next)
+	require.False(t, reclaimed)
+}
+
+func TestNextOnHeartbeat_SuspectUnchanged(t *testing.T) {
+	// arrange
+	cur := membership.Suspect
+
+	// act
+	next, reclaimed := nextOnHeartbeat(cur)
+
+	// assert
+	require.Equal(t, membership.Suspect, next)
+	require.False(t, reclaimed)
+}
+
+func TestNextOnTick_AliveHoldsBelowHigh(t *testing.T) {
+	// arrange
+	const low, high = 1.0, 8.0
+
+	// act
+	next, reap := nextOnTick(membership.Alive, 5, low, high, false, false)
+
+	// assert
+	require.Equal(t, membership.Alive, next)
+	require.False(t, reap)
+}
+
+func TestNextOnTick_AliveFlipsToSuspectAtHigh(t *testing.T) {
+	// arrange
+	const low, high = 1.0, 8.0
+
+	// act
+	next, reap := nextOnTick(membership.Alive, 8, low, high, false, false)
+
+	// assert
+	require.Equal(t, membership.Suspect, next)
+	require.False(t, reap)
+}
+
+func TestNextOnTick_SuspectRecoversToAliveAtLow(t *testing.T) {
+	// arrange
+	const low, high = 1.0, 8.0
+
+	// act
+	next, reap := nextOnTick(membership.Suspect, 1, low, high, false, false)
+
+	// assert
+	require.Equal(t, membership.Alive, next)
+	require.False(t, reap)
+}
+
+func TestNextOnTick_SuspectHoldsBetweenLowAndHigh(t *testing.T) {
+	// arrange
+	const low, high = 1.0, 8.0
+
+	// act
+	next, reap := nextOnTick(membership.Suspect, 5, low, high, false, false)
+
+	// assert
+	require.Equal(t, membership.Suspect, next)
+	require.False(t, reap)
+}
+
+func TestNextOnTick_SuspectHoldsAtHighBeforeDwell(t *testing.T) {
+	// arrange
+	const low, high = 1.0, 8.0
+
+	// act
+	next, reap := nextOnTick(membership.Suspect, 8, low, high, false, false)
+
+	// assert
+	require.Equal(t, membership.Suspect, next)
+	require.False(t, reap)
+}
+
+func TestNextOnTick_SuspectFailsAtHighAfterDwell(t *testing.T) {
+	// arrange
+	const low, high = 1.0, 8.0
+
+	// act
+	next, reap := nextOnTick(membership.Suspect, 8, low, high, true, false)
+
+	// assert
+	require.Equal(t, membership.Failed, next)
+	require.False(t, reap)
+}
+
+func TestNextOnTick_SuspectHoldsBelowHighAfterDwell(t *testing.T) {
+	// arrange
+	const low, high = 1.0, 8.0
+
+	// act
+	next, reap := nextOnTick(membership.Suspect, 5, low, high, true, false)
+
+	// assert
+	require.Equal(t, membership.Suspect, next)
+	require.False(t, reap)
+}
+
+func TestNextOnTick_FailedHoldsBeforeReap(t *testing.T) {
+	// arrange
+	const low, high = 1.0, 8.0
+
+	// act
+	next, reap := nextOnTick(membership.Failed, 0, low, high, false, false)
+
+	// assert
+	require.Equal(t, membership.Failed, next)
+	require.False(t, reap)
+}
+
+func TestNextOnTick_FailedReapedAfterReapDwell(t *testing.T) {
+	// arrange
+	const low, high = 1.0, 8.0
+
+	// act
+	next, reap := nextOnTick(membership.Failed, 0, low, high, false, true)
+
+	// assert
+	require.Equal(t, membership.Failed, next)
+	require.True(t, reap)
 }
 
 func TestPhiFromWindow_MatchesKnownValue(t *testing.T) {
