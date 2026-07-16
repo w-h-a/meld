@@ -280,7 +280,7 @@ func (m *phiMembership) updatePeerWindow(ctx context.Context, from nodeState, no
 
 		m.memberMtx.Unlock()
 
-		m.recordTransition(ctx, prev, false, node)
+		m.recordTransition(ctx, prev, ok, node)
 		return
 	}
 
